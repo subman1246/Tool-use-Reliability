@@ -39,18 +39,36 @@ providers through LiteLLM:
   `r_syn`, `r_sem`, with partial pooling across families and scales. When a
   parameter is not separately identified for a flatlined model, report `L_t`.
 
+## Documentation
+
+- `docs/NEXT_STEPS.md` — the ordered checklist for moving from this
+  simulated-suite validation to a real model comparison (start here).
+- `docs/PAPER_DRAFT.md` — a working paper draft: Introduction, Related Work,
+  Method, and the full pipeline-validation section are complete; Results,
+  Discussion, and Conclusion are templated pending real data.
+- `docs/METHODOLOGY.md`, `docs/LITERATURE_REVIEW.md` — the underlying
+  research design and literature survey.
+- `docs/RESULTS_validation_run.md` — the full simulated-suite validation
+  results, and a worked example of the table/figure structure to follow when
+  writing up real results.
+
 ## Quickstart
 
 ```bash
 pip install -r requirements.txt
 pip install -e .
 
-# offline, no keys needed
+# offline, no keys needed -- the simulated-suite validation from docs/RESULTS_validation_run.md
 PYTHONPATH=src python scripts/run_experiment.py --mock
+PYTHONPATH=src python scripts/run_full_analysis.py           # full validation run
+PYTHONPATH=src python -m tur.analysis.plots --tag official   # regenerate its figures
 
-# a real model (reads keys from .env)
+# the REAL experiment (needs API keys -- see docs/NEXT_STEPS.md)
 cp .env.example .env   # then fill in
-PYTHONPATH=src python scripts/run_experiment.py --model groq/qwen2.5-7b-instruct
+PYTHONPATH=src python scripts/estimate_cost.py                # budget first
+PYTHONPATH=src python scripts/run_real_suite.py --pilot       # small sanity check
+PYTHONPATH=src python scripts/run_real_suite.py                # full sweep
+PYTHONPATH=src python -m tur.analysis.plots --tag real         # its figures
 
 # tests
 PYTHONPATH=src python tests/test_smoke.py       # pipeline, no heavy deps

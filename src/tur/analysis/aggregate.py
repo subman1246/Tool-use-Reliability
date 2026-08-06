@@ -32,6 +32,7 @@ class DepthStats:
     selection_gold_acc: float  # agreement with the gold trajectory
     parse_fail_rate: float
     stalled_rate: float   # share of steps entered on a stalled chain
+    n_backend_err: int = 0  # provider-call failures excluded from all other stats
 
 
 def load_records(path: str) -> list[dict]:
@@ -51,8 +52,10 @@ def aggregate_by_depth(records: list[dict], depths: list[int]) -> list[DepthStat
 
     out = []
     for d in depths:
-        tf_d = tf.get(d, [])
-        fr_d = fr.get(d, [])
+        tf_d = [r for r in tf.get(d, []) if not r.get("backend_error", False)]
+        fr_d = [r for r in fr.get(d, []) if not r.get("backend_error", False)]
+        n_backend_err = (sum(1 for r in tf.get(d, []) if r.get("backend_error", False))
+                        + sum(1 for r in fr.get(d, []) if r.get("backend_error", False)))
 
         p_t = _safe_mean([r["args_correct_strict"] for r in tf_d])
         g_t = _safe_mean([r["args_correct_strict"] for r in fr_d])
@@ -86,7 +89,8 @@ def aggregate_by_depth(records: list[dict], depths: list[int]) -> list[DepthStat
                               L_t=L_t, selection_acc=sel_acc,
                               selection_gold_acc=sel_gold,
                               parse_fail_rate=parse_fail,
-                              stalled_rate=stalled_rate))
+                              stalled_rate=stalled_rate,
+                              n_backend_err=n_backend_err))
     return out
 
 
@@ -102,8 +106,10 @@ def bootstrap_L_ci(records: list[dict], depth: int, n_boot: int = 2000,
     Returns (L_point, lo, hi) at the (1-alpha) level; defaults to an 89% CI.
     """
     rng = np.random.default_rng(seed)
-    tf = [r for r in records if r["run_mode"] == "teacher_forced" and r["depth"] == depth]
-    fr = [r for r in records if r["run_mode"] == "free" and r["depth"] == depth]
+    tf = [r for r in records if r["run_mode"] == "teacher_forced"
+         and r["depth"] == depth and not r.get("backend_error", False)]
+    fr = [r for r in records if r["run_mode"] == "free"
+         and r["depth"] == depth and not r.get("backend_error", False)]
     if not tf or not fr:
         return float("nan"), float("nan"), float("nan")
 

@@ -28,6 +28,13 @@ def load_all():
     return meta, idata
 
 
+def _grid_shape(n: int) -> tuple[int, int]:
+    """A reasonable (rows, cols) for n small-multiple panels."""
+    cols = min(3, n) or 1
+    rows = -(-n // cols)  # ceil
+    return rows, cols
+
+
 def fig_p_vs_g(meta):
     """p_t (clean baseline) vs g_t (global rate) per model: the propagation gap."""
     depths = meta["depths"]
@@ -35,15 +42,19 @@ def fig_p_vs_g(meta):
     p = np.array(meta["p"]); succ = np.array(meta["successes"]); tri = np.array(meta["trials"])
     g = np.divide(succ, tri, out=np.full_like(succ, np.nan, dtype=float), where=tri > 0)
 
-    fig, axes = plt.subplots(2, 3, figsize=(13, 7), sharey=True)
-    for ax, name, p_row, g_row in zip(axes.flat, names, p, g):
+    rows, cols = _grid_shape(len(names))
+    fig, axes = plt.subplots(rows, cols, figsize=(4.3 * cols, 3.5 * rows), sharey=True)
+    axes = np.atleast_1d(axes).flatten()
+    for ax, name, p_row, g_row in zip(axes, names, p, g):
         ax.plot(depths, p_row, "o-", color="#333333", label="$p_t$ (clean baseline)")
         ax.plot(depths, g_row, "s-", color=COLORS.get(name, "#1155CC"), label="$g_t$ (free run)")
         ax.fill_between(depths, g_row, p_row, alpha=0.15, color=COLORS.get(name, "#1155CC"))
         ax.set_title(name, fontsize=10)
         ax.set_xlabel("depth"); ax.set_ylim(0, 1.05)
-    axes[0, 0].set_ylabel("correct-invocation rate")
-    axes[0, 0].legend(fontsize=8, loc="lower left")
+    for ax in axes[len(names):]:
+        ax.axis("off")
+    axes[0].set_ylabel("correct-invocation rate")
+    axes[0].legend(fontsize=8, loc="lower left")
     fig.suptitle("Clean baseline vs global correctness — the propagation gap")
     fig.tight_layout()
     fig.savefig(f"{FIG_DIR}/fig1_p_vs_g.png", dpi=150)
@@ -107,22 +118,53 @@ def fig_posterior_forest(idata, meta):
 
 
 def fig_pi_vs_scale(idata, meta):
-    """pi vs configured scale tier, one line per family: visual check of H2."""
+    """pi vs scale, one line per family. Uses explicit family/scale fields from
+    the run config when available (the real-model config always has them via
+    config/default.yaml); falls back to parsing the simulated suite's
+    'famX-weak/mid/strong' naming convention, and skips gracefully if neither
+    is available rather than crashing on an unfamiliar naming scheme."""
     names = meta["names"]
-    tier_order = {"weak": 0, "mid": 1, "strong": 2}
     pi_mean = idata.posterior["pi"].mean(("chain", "draw")).values
     pi_sd = idata.posterior["pi"].std(("chain", "draw")).values
 
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    for fam, fam_color in [("fam0", "#c0392b"), ("fam1", "#2980b9")]:
-        idx = [i for i, n in enumerate(names) if n.startswith(fam)]
-        idx.sort(key=lambda i: tier_order[names[i].split("-")[1]])
-        xs = [tier_order[names[i].split("-")[1]] for i in idx]
-        ys = [pi_mean[i] for i in idx]
-        es = [pi_sd[i] for i in idx]
-        ax.errorbar(xs, ys, yerr=es, marker="o", label=fam, color=fam_color, capsize=3)
-    ax.set_xticks([0, 1, 2]); ax.set_xticklabels(["weak", "mid", "strong"])
-    ax.set_ylabel("posterior mean $\\pi$"); ax.set_title("Poisoning severity vs. scale tier (H2)")
+    models_cfg = meta.get("models_config") or meta.get("config")
+    by_name = {c["name"]: c for c in models_cfg} if models_cfg else {}
+    has_explicit = models_cfg and all(
+        "family" in by_name.get(n, {}) and "scale" in by_name.get(n, {}) for n in names)
+
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    if has_explicit:
+        families = sorted({by_name[n]["family"] for n in names})
+        palette = plt.cm.tab10.colors
+        for fi, fam in enumerate(families):
+            idx = [i for i, n in enumerate(names) if by_name[n]["family"] == fam]
+            idx.sort(key=lambda i: by_name[names[i]]["scale"])
+            xs = [by_name[names[i]]["scale"] for i in idx]
+            ys = [pi_mean[i] for i in idx]
+            es = [pi_sd[i] for i in idx]
+            ax.errorbar(xs, ys, yerr=es, marker="o", label=fam,
+                       color=palette[fi % len(palette)], capsize=3)
+        ax.set_xlabel("parameter scale")
+        ax.set_title("Poisoning severity vs. scale (H2)")
+    else:
+        tier_order = {"weak": 0, "mid": 1, "strong": 2}
+        parseable = all(len(n.split("-")) >= 2 and n.split("-")[1] in tier_order
+                        for n in names)
+        if not parseable:
+            print("  (skipping fig4_pi_vs_scale: no family/scale config and "
+                 "names don't match the fam-tier convention)")
+            plt.close(fig)
+            return
+        for fam, fam_color in [("fam0", "#c0392b"), ("fam1", "#2980b9")]:
+            idx = [i for i, n in enumerate(names) if n.startswith(fam)]
+            idx.sort(key=lambda i: tier_order[names[i].split("-")[1]])
+            xs = [tier_order[names[i].split("-")[1]] for i in idx]
+            ys = [pi_mean[i] for i in idx]
+            es = [pi_sd[i] for i in idx]
+            ax.errorbar(xs, ys, yerr=es, marker="o", label=fam, color=fam_color, capsize=3)
+        ax.set_xticks([0, 1, 2]); ax.set_xticklabels(["weak", "mid", "strong"])
+        ax.set_title("Poisoning severity vs. scale tier (H2)")
+    ax.set_ylabel("posterior mean $\\pi$")
     ax.legend()
     fig.tight_layout()
     fig.savefig(f"{FIG_DIR}/fig4_pi_vs_scale.png", dpi=150)
@@ -132,10 +174,12 @@ def fig_pi_vs_scale(idata, meta):
 def fig_error_type_by_depth(meta):
     """Stacked share of syntactic vs semantic errors by depth, pooled and per model."""
     depths = meta["depths"]; names = meta["names"]
-    f_syn = np.array(meta["f_syn"])  # [M, T], NaN-filled already in the saved meta? (raw here)
+    f_syn = np.array(meta["f_syn"])  # [M, T]
 
-    fig, axes = plt.subplots(2, 3, figsize=(13, 6.5), sharey=True)
-    for ax, name, row in zip(axes.flat, names, f_syn):
+    rows, cols = _grid_shape(len(names))
+    fig, axes = plt.subplots(rows, cols, figsize=(4.3 * cols, 3.3 * rows), sharey=True)
+    axes = np.atleast_1d(axes).flatten()
+    for ax, name, row in zip(axes, names, f_syn):
         row = np.array(row, dtype=float)
         syn = np.nan_to_num(row, nan=0.5)
         sem = 1 - syn
@@ -143,8 +187,10 @@ def fig_error_type_by_depth(meta):
         ax.bar(range(len(depths)), sem, bottom=syn, label="semantic", color="#e74c3c")
         ax.set_xticks(range(len(depths))); ax.set_xticklabels(depths)
         ax.set_title(name, fontsize=10); ax.set_xlabel("depth")
-    axes[0, 0].set_ylabel("share of errors")
-    axes[0, 0].legend(fontsize=8)
+    for ax in axes[len(names):]:
+        ax.axis("off")
+    axes[0].set_ylabel("share of errors")
+    axes[0].legend(fontsize=8)
     fig.suptitle("Error-type composition by depth (H4)")
     fig.tight_layout()
     fig.savefig(f"{FIG_DIR}/fig5_error_type_by_depth.png", dpi=150)
@@ -198,7 +244,16 @@ def fig_delta1(meta):
 
 
 def main():
+    import argparse
     import os
+    global RUN_TAG
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tag", default="official",
+                    help="run tag prefix, e.g. 'official' (simulated validation) "
+                         "or 'real' (actual model run)")
+    args = ap.parse_args()
+    RUN_TAG = args.tag
+
     os.makedirs(FIG_DIR, exist_ok=True)
     meta, idata = load_all()
     fig_p_vs_g(meta)

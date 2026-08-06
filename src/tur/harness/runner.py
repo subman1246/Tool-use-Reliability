@@ -19,10 +19,13 @@ and are carried forward, which is how propagation happens.
 from __future__ import annotations
 
 import json
+import random
+import time
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Protocol
 
 from tur.eval.scoring import ParsedCall, ErrorType, score_step
+from tur.harness.cache import Cache
 from tur.harness.executor import FeedbackMode, execute
 from tur.tasks.dag import Task
 
@@ -59,30 +62,88 @@ class MockBackend:
 
 
 class LiteLLMBackend:
-    """Provider-agnostic backend via LiteLLM. Imported lazily."""
+    """Provider-agnostic backend via LiteLLM. Imported lazily.
 
-    def __init__(self, model: str, temperature: float = 0.0):
+    Wraps every call with retry-with-backoff for transient network/rate-limit
+    errors. This is distinct from the harness's own within-step retry (which
+    handles syntactic failures by re-prompting the model) -- this layer
+    handles the call to the provider itself not going through at all.
+    Without it, a single rate-limit blip partway through a real run kills the
+    whole batch and wastes every call made so far that wasn't yet cached.
+    """
+
+    def __init__(self, model: str, temperature: float = 0.0,
+                max_retries: int = 5, base_delay: float = 1.0,
+                timeout: float = 60.0, cache: "Cache | None" = None):
         self.model = model
         self.temperature = temperature
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self.timeout = timeout
+        self.cache = cache
+        self.n_calls = 0
+        self.n_cache_hits = 0
+        self.n_retries = 0
+        self.n_failures = 0
 
     def complete(self, messages, tools, mode):
-        import litellm  # lazy so the package imports without the dep
         clean = [{k: v for k, v in m.items() if not k.startswith("_")}
                  for m in messages]
+        cache_key = None
+        if self.cache is not None:
+            cache_key = Cache.key(self.model, mode, clean, tools)
+            hit = self.cache.get(cache_key)
+            if hit is not None:
+                self.n_cache_hits += 1
+                return hit
+
+        import litellm
         kwargs: dict[str, Any] = dict(model=self.model, messages=clean,
-                                      temperature=self.temperature)
+                                      temperature=self.temperature,
+                                      timeout=self.timeout)
         if mode == "native" and tools:
             kwargs["tools"] = [{"type": "function",
                                 "function": {"name": t["name"],
                                              "description": t["description"],
                                              "parameters": _json_schema(t)}}
                                for t in tools]
-        resp = litellm.completion(**kwargs)
-        msg = resp["choices"][0]["message"]
-        if mode == "native" and msg.get("tool_calls"):
-            tc = msg["tool_calls"][0]["function"]
-            return {"tool_call": {"name": tc["name"], "arguments": tc["arguments"]}}
-        return {"text": msg.get("content") or ""}
+
+        last_err = None
+        for attempt in range(self.max_retries + 1):
+            self.n_calls += 1
+            try:
+                resp = litellm.completion(**kwargs)
+                msg = resp["choices"][0]["message"]
+                if mode == "native" and msg.get("tool_calls"):
+                    tc = msg["tool_calls"][0]["function"]
+                    result = {"tool_call": {"name": tc["name"],
+                                            "arguments": tc["arguments"]}}
+                else:
+                    result = {"text": msg.get("content") or ""}
+                if self.cache is not None:
+                    self.cache.set(cache_key, result)
+                return result
+            except Exception as e:  # noqa: broad except is intentional here --
+                # litellm normalises errors across providers into its own
+                # exception hierarchy, but network/timeout errors from the
+                # underlying transport can still leak through untyped.
+                last_err = e
+                if attempt < self.max_retries:
+                    self.n_retries += 1
+                    delay = self.base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                    time.sleep(delay)
+                else:
+                    self.n_failures += 1
+        # exhausted retries: return a sentinel the parser will treat as a
+        # syntactic failure (empty/unparseable), so it is scored and logged
+        # rather than crashing the whole run. Distinguishable in logs via the
+        # "_backend_error" marker.
+        return {"text": "", "_backend_error": str(last_err)}
+
+    def stats(self) -> dict:
+        return {"model": self.model, "n_calls": self.n_calls,
+               "n_cache_hits": self.n_cache_hits, "n_retries": self.n_retries,
+               "n_failures": self.n_failures}
 
 
 def _json_schema(tool_view: dict) -> dict:
@@ -98,6 +159,13 @@ def _json_schema(tool_view: dict) -> dict:
 # --------------------------- parsing ---------------------------
 
 def parse_response(resp: dict, mode: str) -> ParsedCall:
+    if "_backend_error" in resp:
+        # the call to the provider never succeeded (exhausted retries); this
+        # is a distinct failure mode from the model producing a bad response,
+        # and is tagged in raw so it can be filtered out of f_syn/error-type
+        # analysis rather than counted as a genuine model mistake.
+        return ParsedCall(None, None, parse_ok=False,
+                          raw=f"[BACKEND_ERROR] {resp['_backend_error']}")
     if mode == "native":
         tc = resp.get("tool_call")
         if not tc:
@@ -153,6 +221,7 @@ class StepRecord:
     context_clean_in: bool
     recovered: bool
     stalled_in: bool = False         # entered this step on a stalled chain
+    backend_error: bool = False      # the provider call itself failed, not the model
 
 
 # --------------------------- prompt ---------------------------
@@ -247,7 +316,8 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
             final_score.selection_correct, final_score.selection_matches_gold,
             final_score.args_correct_strict,
             final_score.args_correct_soft, final_score.error_type.value,
-            attempts, executed, context_clean, recovered, stalled_in=stalled_in))
+            attempts, executed, context_clean, recovered, stalled_in=stalled_in,
+            backend_error=bool(call and call.is_backend_error)))
     return records
 
 
@@ -300,7 +370,8 @@ def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
             final_score.selection_correct, final_score.selection_matches_gold,
             final_score.args_correct_strict,
             final_score.args_correct_soft, final_score.error_type.value,
-            attempts, executed, True, recovered, stalled_in=False))
+            attempts, executed, True, recovered, stalled_in=False,
+            backend_error=bool(final_call and final_call.is_backend_error)))
     return records
 
 

@@ -32,6 +32,10 @@ class ParsedCall:
     parse_ok: bool
     raw: str = ""
 
+    @property
+    def is_backend_error(self) -> bool:
+        return self.raw.startswith("[BACKEND_ERROR]")
+
 
 @dataclass
 class StepScore:
