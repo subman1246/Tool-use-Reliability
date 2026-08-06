@@ -1,0 +1,18 @@
+# experiment configuration
+depths: [1, 2, 4, 6, 8]
+per_depth: 150
+distractor_level: 1
+seeds: 3
+feedback: structured        # structured | opaque
+call_mode: uniform          # uniform | native
+max_retries: 1
+
+models:
+  - {name: "groq/qwen2.5-7b-instruct",  family: "qwen",  scale: 7}
+  - {name: "groq/qwen2.5-32b-instruct", family: "qwen",  scale: 32}
+  - {name: "groq/llama-3.1-8b-instruct", family: "llama", scale: 8}
+  - {name: "gpt-4o-mini",               family: "gpt",   scale: 0}   # reference subset
+
+paths:
+  results: data/results
+  cache: data/cache
