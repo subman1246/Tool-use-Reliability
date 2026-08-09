@@ -112,6 +112,17 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     cache_dir = cfg.get("paths", {}).get("cache", "data/cache")
 
+    # Map the config's family strings to integer group indices for the
+    # hierarchical model's partial pooling. Without this, every model lands in
+    # its own group and the pooling does nothing.
+    fam_names = []
+    for m in models:
+        f = m.get("family", m["name"])
+        if f not in fam_names:
+            fam_names.append(f)
+    fam_to_idx = {f: i for i, f in enumerate(fam_names)}
+    print(f"Model families for pooling: {fam_to_idx}")
+
     p_rows, f_rows, succ_rows, tri_rows, group, names, backend_stats = \
         [], [], [], [], [], [], {}
     delta_results, L_ci, extra = {}, {}, {}
@@ -137,7 +148,7 @@ def main():
 
         p_rows.append(p); f_rows.append(f_syn)
         succ_rows.append(succ); tri_rows.append(tri)
-        group.append(m.get("family_index", gi))  # falls back to one group per model
+        group.append(fam_to_idx[m.get("family", m["name"])])
         names.append(m["name"])
 
         n_be = sum(s.n_backend_err for s in stats_by_depth)

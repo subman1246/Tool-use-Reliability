@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-.env
-.venv/
-data/results/*
-!data/results/.gitkeep
-data/cache/
-*.nc
-.ipynb_checkpoints/

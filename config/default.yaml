@@ -2,16 +2,22 @@
 depths: [1, 2, 4, 6, 8]
 per_depth: 150
 distractor_level: 1
-seeds: 3
+seeds: 2
 feedback: structured        # structured | opaque
 call_mode: uniform          # uniform | native
 max_retries: 1
 
+# NOTE: model IDs below are a starting point and MUST be verified against each
+# provider's current model list before the real run -- names drift often.
+# All entries here are free-tier. `family` drives the hierarchical model's
+# partial pooling; `scale` (in billions of params) drives the pi-vs-scale figure.
 models:
-  - {name: "groq/qwen2.5-7b-instruct",  family: "qwen",  scale: 7}
-  - {name: "groq/qwen2.5-32b-instruct", family: "qwen",  scale: 32}
-  - {name: "groq/llama-3.1-8b-instruct", family: "llama", scale: 8}
-  - {name: "gpt-4o-mini",               family: "gpt",   scale: 0}   # reference subset
+  - {name: "groq/qwen2.5-7b-instruct",   family: "qwen",   scale: 7}
+  - {name: "groq/qwen2.5-32b-instruct",  family: "qwen",   scale: 32}
+  - {name: "groq/qwen2.5-72b-instruct",  family: "qwen",   scale: 72}
+  - {name: "groq/llama-3.1-8b-instruct", family: "llama",  scale: 8}
+  - {name: "groq/llama-3.3-70b-versatile", family: "llama", scale: 70}
+  - {name: "gemini/gemini-2.5-flash",    family: "gemini", scale: 0}
 
 paths:
   results: data/results
