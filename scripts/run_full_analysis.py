@@ -21,7 +21,8 @@ from tur.harness.executor import FeedbackMode
 from tur.harness.runner import run_free, run_teacher_forced, MockBackend
 from tur.harness.sim_policy import SimPolicy, SimPolicyConfig, DEFAULT_SUITE, FAMILY_INDEX
 from tur.analysis.aggregate import (load_records, aggregate_by_depth,
-                                    stats_to_arrays, bootstrap_L_ci)
+                                    stats_to_arrays, bootstrap_L_ci,
+                                    aggregate_by_step, measure_recovery)
 from tur.model.hierarchical import build_and_sample, identifiability
 
 DEPTHS = [1, 2, 4, 6, 8]
@@ -87,6 +88,7 @@ def main():
     delta_results = {}
     L_ci = {}
     extra = {}
+    recov, per_step = {}, {}
 
     for cfg in DEFAULT_SUITE:
         print(f"running {cfg.name} ...")
@@ -109,6 +111,8 @@ def main():
         succ_rows.append(succ); tri_rows.append(tri)
         group.append(FAMILY_INDEX[cfg.name]); names.append(cfg.name)
 
+        recov[cfg.name] = measure_recovery(loaded)
+        per_step[cfg.name] = [st.__dict__ for st in aggregate_by_step(loaded)]
         d1, gc, gw, n_gc, n_gw = delta_1(loaded)
         delta_results[cfg.name] = {"delta_1": d1, "p_next_given_correct": gc,
                                    "p_next_given_wrong": gw,
@@ -136,10 +140,27 @@ def main():
     successes = np.array(succ_rows); trials = np.array(tri_rows)
     group = np.array(group)
 
+    # Recovery rates measured off labelled transitions, averaged within family
+    # and fed in as informative prior centres. Methodology Section 3 states the
+    # measured rates "enter as informative priors"; before this they did not.
+    G = int(group.max()) + 1
+
+    def fam_mean(key):
+        out = []
+        for g in range(G):
+            vals = [recov[n][key] for i, n in enumerate(names)
+                    if group[i] == g and not np.isnan(recov[n][key])]
+            out.append(float(np.mean(vals)) if vals else float("nan"))
+        return out
+
+    prior_rs, prior_rm = fam_mean("r_syn_chain"), fam_mean("r_sem_chain")
+    print(f"measured recovery -> prior centres: r_syn={prior_rs} r_sem={prior_rm}")
+
     print("\nfitting hierarchical model ...")
     idata = build_and_sample(p, f_syn, successes, trials, group,
                              draws=1500, tune=1500, chains=4, seed=7,
-                             target_accept=0.97)
+                             target_accept=0.97,
+                             prior_r_syn=prior_rs, prior_r_sem=prior_rm)
 
     # persist everything the plotting script needs
     with open(f"{OUT_DIR}/{RUN_TAG}_idata.pkl", "wb") as fh:
@@ -150,6 +171,8 @@ def main():
                   "successes": successes.tolist(), "trials": trials.tolist(),
                   "delta_1": delta_results,
                   "L_ci": L_ci, "per_depth_extra": extra,
+                  "measured_recovery": recov, "per_step": per_step,
+                  "priors_used": {"r_syn": prior_rs, "r_sem": prior_rm},
                   "config": [c.__dict__ for c in DEFAULT_SUITE]}, fh, indent=2)
 
     print(f"\nsaved trace -> {OUT_DIR}/{RUN_TAG}_idata.pkl")

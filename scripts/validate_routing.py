@@ -13,12 +13,18 @@ Two questions:
      wrong BRANCH, so selection errors can propagate, which linear cannot
      exercise.
 
-  2. Does the error-type decomposition detect a depth-varying error mix (H4)?
-     The linear suite could not test H4 because every policy was configured with
-     a FLAT syntax share, so there was nothing for the decomposition to find.
-     Two policies here vary syntax_share with depth in opposite directions, so a
-     detector that works must recover both the rising and the falling trend --
-     and must not invent one for the flat controls.
+  2. Does the error-type decomposition detect an error mix that varies along the
+     chain (H4)? The linear suite could not test H4: every policy held both the
+     syntactic and the selection share constant, so there was nothing for the
+     decomposition to find, and it could only ever confirm "flat in, flat out".
+     Here one policy has a rising syntactic share and another a falling
+     SELECTION share -- the latter being H4's actual claim, selection-dominated
+     early and argument-dominated later. Two flat controls must show no trend.
+
+     Note that this is measured by STEP INDEX, not by task depth: pooling all
+     steps of a depth-8 task into one bin averages away the very trend H4 is
+     about, and was measured to recover only 30-49% of a configured span where
+     per-step resolution recovers 68-91%.
 """
 
 from __future__ import annotations
@@ -34,7 +40,8 @@ from tur.harness.executor import FeedbackMode
 from tur.harness.runner import run_free, run_teacher_forced, MockBackend
 from tur.harness.sim_policy import SimPolicy, SimPolicyConfig
 from tur.analysis.aggregate import (load_records, aggregate_by_depth,
-                                    stats_to_arrays, bootstrap_L_ci)
+                                    stats_to_arrays, bootstrap_L_ci,
+                                    aggregate_by_step, measure_recovery)
 from tur.model.hierarchical import build_and_sample, identifiability
 
 DEPTHS = [1, 2, 4, 6, 8]
@@ -44,57 +51,72 @@ OUT_DIR = "data/results"
 RUN_TAG = "routingval"
 
 
-class DepthVaryingSyntaxPolicy(SimPolicy):
-    """SimPolicy whose syntactic share is a function of depth.
+class DepthVaryingMixPolicy(SimPolicy):
+    """SimPolicy whose error mix is a function of position in the chain.
 
-    H4 predicts the error mix shifts with depth (selection-dominated early,
-    argument-dominated later). Every policy in the default suite holds
-    syntax_share constant, so the H4 test in the linear validation run was
-    vacuous by construction -- it could only ever confirm "flat in, flat out".
-    Here syntax_share moves linearly from `share_at_1` at step 0 to `share_at_8`
-    at step 7, giving the decomposition a known non-flat trend to recover.
+    H4 predicts the mix shifts with depth: selection-dominated at the first step,
+    argument-dominated deeper in. Every policy in the default suite holds both
+    shares constant, so the H4 test in the linear validation run was vacuous by
+    construction -- it could only ever confirm "flat in, flat out".
+
+    Two shares can be given a trend, each moving linearly from its value at step
+    0 to its value at step 7:
+
+      syntax  : the syntactic share of all fresh errors
+      select  : the selection share of the SEMANTIC (executing) errors, which is
+                the quantity H4 actually names
     """
 
-    def __init__(self, cfg: SimPolicyConfig, share_at_1: float, share_at_8: float):
+    def __init__(self, cfg: SimPolicyConfig, syntax_trend=None,
+                 select_trend=None):
         super().__init__(cfg)
-        self.share_at_1 = share_at_1
-        self.share_at_8 = share_at_8
+        self.syntax_trend = syntax_trend
+        self.select_trend = select_trend
 
-    def syntax_share_at(self, step: int) -> float:
-        frac = min(1.0, step / 7.0)
-        return self.share_at_1 + (self.share_at_8 - self.share_at_1) * frac
+    @staticmethod
+    def _at(trend, step: int) -> float:
+        lo, hi = trend
+        return lo + (hi - lo) * min(1.0, step / 7.0)
 
     def __call__(self, task, step: int, ref: int, attempt: int):
-        # Mutate the configured share for this step, then defer to the parent so
+        # Mutate the configured shares for this step, then defer to the parent so
         # every other mechanism (recovery, poisoning, retry) stays identical.
-        self.cfg.syntax_share = self.syntax_share_at(step)
+        if self.syntax_trend:
+            self.cfg.syntax_share = self._at(self.syntax_trend, step)
+        if self.select_trend:
+            self.cfg.selection_share = self._at(self.select_trend, step)
         return super().__call__(task, step, ref, attempt)
 
 
-# Two flat controls spanning weak/strong, plus two depth-varying policies with
-# opposite trends. Flat controls must show no trend; the others must show theirs.
+# Two flat controls, then two policies with known trends. `falling-sel` is the
+# direct H4 shape: selection-dominated early, argument-dominated later, with the
+# syntactic share held flat so the selection/argument movement is not confounded
+# with a change in how many errors execute at all.
 SUITE = [
-    ("flat-weak", SimPolicyConfig("flat-weak", p0=0.78, p_slope=0.020, pi=0.70,
-                                  syntax_share=0.50, r_syn=0.35, r_sem=0.05,
-                                  seed=11), None),
+    ("flat-mix", SimPolicyConfig("flat-mix", p0=0.78, p_slope=0.020, pi=0.70,
+                                 syntax_share=0.50, r_syn=0.35, r_sem=0.05,
+                                 seed=11, selection_share=0.40), None, None),
     ("flat-strong", SimPolicyConfig("flat-strong", p0=0.95, p_slope=0.006, pi=0.22,
                                     syntax_share=0.50, r_syn=0.75, r_sem=0.30,
-                                    seed=12), None),
+                                    seed=12, selection_share=0.40), None, None),
     ("rising-syn", SimPolicyConfig("rising-syn", p0=0.88, p_slope=0.012, pi=0.45,
                                    syntax_share=0.50, r_syn=0.55, r_sem=0.15,
-                                   seed=13), (0.20, 0.80)),
-    ("falling-syn", SimPolicyConfig("falling-syn", p0=0.86, p_slope=0.013, pi=0.40,
+                                   seed=13, selection_share=0.40),
+     (0.20, 0.80), None),
+    ("falling-sel", SimPolicyConfig("falling-sel", p0=0.86, p_slope=0.013, pi=0.40,
                                     syntax_share=0.50, r_syn=0.50, r_sem=0.12,
-                                    seed=14), (0.80, 0.20)),
+                                    seed=14, selection_share=0.40),
+     None, (0.80, 0.15)),
 ]
-FAMILY = {"flat-weak": 0, "flat-strong": 0, "rising-syn": 1, "falling-syn": 1}
+FAMILY = {"flat-mix": 0, "flat-strong": 0, "rising-syn": 1, "falling-sel": 1}
 
 
-def run_policy(cfg: SimPolicyConfig, trend) -> list[dict]:
+def run_policy(cfg: SimPolicyConfig, syn_trend, sel_trend) -> list[dict]:
     records = []
     for seed in range(SEEDS):
         c = SimPolicyConfig(**{**cfg.__dict__, "seed": cfg.seed * 97 + seed})
-        policy = (DepthVaryingSyntaxPolicy(c, *trend) if trend else SimPolicy(c))
+        policy = (DepthVaryingMixPolicy(c, syn_trend, sel_trend)
+                  if (syn_trend or sel_trend) else SimPolicy(c))
         backend = MockBackend(policy, model=cfg.name)
         suite = generate_routing_suite(DEPTHS, PER_DEPTH, distractor_level=1,
                                        base_seed=seed * 31 + 1000)
@@ -132,10 +154,13 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     p_rows, f_rows, s_rows, t_rows, group, names = [], [], [], [], [], []
     L_ci, d1, per_depth, truth, filled_note = {}, {}, {}, {}, {}
+    per_step, recov = {}, {}
 
-    for name, cfg, trend in SUITE:
-        print(f"running {name} (routing{', depth-varying syntax' if trend else ''}) ...")
-        records = run_policy(cfg, trend)
+    for name, cfg, syn_trend, sel_trend in SUITE:
+        label = (', varying syntax' if syn_trend else
+                 ', varying selection' if sel_trend else '')
+        print(f"running {name} (routing{label}) ...")
+        records = run_policy(cfg, syn_trend, sel_trend)
         path = f"{OUT_DIR}/{RUN_TAG}_{name}.jsonl"
         with open(path, "w") as fh:
             for r in records:
@@ -154,6 +179,8 @@ def main():
         group.append(FAMILY[name]); names.append(name)
 
         d1[name] = delta_1(loaded)
+        recov[name] = measure_recovery(loaded)
+        per_step[name] = [st.__dict__ for st in aggregate_by_step(loaded)]
         L_ci[name] = {str(d): dict(zip(("L", "lo", "hi"),
                                        bootstrap_L_ci(loaded, d, 1000, seed=13)))
                       for d in DEPTHS}
@@ -165,14 +192,33 @@ def main():
                             "parse_fail_rate": s.parse_fail_rate,
                             "stalled_rate": s.stalled_rate} for s in stats]
         truth[name] = {**cfg.__dict__,
-                       "syntax_trend": ({"at_depth1": trend[0], "at_depth8": trend[1]}
-                                        if trend else "flat")}
+                       "syntax_trend": ({"at_step0": syn_trend[0],
+                                         "at_step7": syn_trend[1]}
+                                        if syn_trend else "flat"),
+                       "selection_trend": ({"at_step0": sel_trend[0],
+                                            "at_step7": sel_trend[1]}
+                                           if sel_trend else "flat")}
+
+    # measured recovery rates -> informative prior centres, per family
+    G = max(group) + 1
+
+    def fam_mean(key):
+        out = []
+        for g in range(G):
+            vals = [recov[n][key] for i, n in enumerate(names)
+                    if group[i] == g and not np.isnan(recov[n][key])]
+            out.append(float(np.mean(vals)) if vals else float("nan"))
+        return out
+
+    prior_rs, prior_rm = fam_mean("r_syn_chain"), fam_mean("r_sem_chain")
+    print(f"measured recovery -> prior centres: r_syn={prior_rs} r_sem={prior_rm}")
 
     print("\nfitting hierarchical model ...")
     idata = build_and_sample(np.array(p_rows), np.array(f_rows),
                              np.array(s_rows), np.array(t_rows),
                              np.array(group), draws=1500, tune=1500, chains=4,
-                             seed=7, target_accept=0.97)
+                             seed=7, target_accept=0.97,
+                             prior_r_syn=prior_rs, prior_r_sem=prior_rm)
 
     ident = {n: identifiability(idata, i) for i, n in enumerate(names)}
     with open(f"{OUT_DIR}/{RUN_TAG}_idata.pkl", "wb") as fh:
@@ -186,8 +232,10 @@ def main():
                    "trials": np.array(t_rows).tolist(),
                    "delta_1": d1, "L_ci": L_ci, "per_depth_extra": per_depth,
                    "truth": truth, "identifiability": ident,
+                   "measured_recovery": recov, "per_step": per_step,
+                   "priors_used": {"r_syn": prior_rs, "r_sem": prior_rm},
                    "substituted_input_depths": filled_note,
-                   "config": [c.__dict__ for _, c, _ in SUITE]}, fh, indent=2)
+                   "config": [c.__dict__ for _, c, _, _ in SUITE]}, fh, indent=2)
     print(f"\nsaved -> {OUT_DIR}/{RUN_TAG}_idata.pkl, {RUN_TAG}_meta.json")
 
 

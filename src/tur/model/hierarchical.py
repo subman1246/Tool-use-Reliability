@@ -20,7 +20,14 @@ import numpy as np
 
 
 def build_and_sample(p, f_syn, successes, trials, group,
-                     draws=800, tune=800, chains=2, seed=0, target_accept=0.9):
+                     draws=800, tune=800, chains=2, seed=0, target_accept=0.9,
+                     prior_r_syn=None, prior_r_sem=None):
+    """Fit the hierarchical propagation model.
+
+    prior_r_syn / prior_r_sem: optional per-FAMILY recovery rates measured from
+    labelled transitions, on the probability scale, used to centre the recovery
+    hyperpriors. Omit for the generic weakly-informative priors.
+    """
     import pymc as pm
     import pytensor
     import pytensor.tensor as pt
@@ -41,11 +48,34 @@ def build_and_sample(p, f_syn, successes, trials, group,
         m1 = c * err * (1.0 - f_t) + m * (1.0 - r_sem)
         return c1, s1, m1
 
+    # Optional informative centres for the recovery hyperpriors, taken from
+    # recovery rates MEASURED off labelled transitions (aggregate.measure_
+    # recovery). The methodology says the measured rates "enter as informative
+    # priors, tightening the real-data fits"; until this existed they did not,
+    # and the priors were generic. Passed on the probability scale, per family,
+    # and converted to the logit scale here. A measured rate at 0 or 1 is
+    # clipped rather than sent to +-inf.
+    def _logit_centre(vals, fallback):
+        if vals is None:
+            return fallback
+        arr = np.asarray(vals, float)
+        if arr.shape != (G,) or not np.all(np.isfinite(arr)):
+            return fallback
+        arr = np.clip(arr, 0.02, 0.98)
+        return np.log(arr / (1.0 - arr))
+
+    mu_rs_centre = _logit_centre(prior_r_syn, 0.0)
+    mu_rm_centre = _logit_centre(prior_r_sem, -1.0)
+    informed = (prior_r_syn is not None) or (prior_r_sem is not None)
+    # Tighter when informed by measurement, still wide enough for the data to
+    # dominate where the data are plentiful.
+    prior_sd = 1.0 if informed else 1.5
+
     with pm.Model() as model:
-        # hyperpriors per family, weakly informative on the logit scale
+        # hyperpriors per family, on the logit scale
         mu_pi = pm.Normal("mu_pi", 0.0, 1.5, shape=G)
-        mu_rs = pm.Normal("mu_rs", 0.0, 1.5, shape=G)
-        mu_rm = pm.Normal("mu_rm", -1.0, 1.5, shape=G)   # semantic recovery prior-low
+        mu_rs = pm.Normal("mu_rs", mu_rs_centre, prior_sd, shape=G)
+        mu_rm = pm.Normal("mu_rm", mu_rm_centre, prior_sd, shape=G)
         sd_pi = pm.HalfNormal("sd_pi", 1.0)
         sd_rs = pm.HalfNormal("sd_rs", 1.0)
         sd_rm = pm.HalfNormal("sd_rm", 1.0)

@@ -17,9 +17,9 @@ Hypotheses:
 - H2: Within a single family, poisoning severity shrinks as parameter scale grows.
 - H3: Function-calling-tuned models raise the clean rate but do not necessarily reduce poisoning severity.
 - H4: The error mix shifts with depth, from selection-dominated at the first step to argument-dominated deeper in the chain.
-- H5a: Recovery from syntactic failures rises when the tool returns a structured exception rather than an opaque failure.
-- H5b: Recovery from semantic errors stays low regardless of feedback format, because no exception is raised.
 - H6: The clean baseline itself declines with depth (context-length degradation), independent of any propagation.
+
+**Withdrawn: H5a and H5b.** These concerned the error-feedback manipulation — whether recovery from syntactic failures rises when the executor returns a structured exception rather than an opaque failure (H5a), and whether semantic recovery stays low regardless (H5b). Both feedback modes are implemented in the executor, but **only the structured condition was run.** Testing H5 requires the entire sweep a second time under the opaque condition, and the free-tier token budget cannot absorb that (see Section 10). Rather than leave hypotheses listed as though they had been tested, they are withdrawn here and the omission is stated in the results. The opaque path remains implemented and unrun, so this is a budget scoping decision, not a limitation of the design.
 
 ## 2. Formal framework
 
@@ -75,7 +75,7 @@ Because both `g_t` and `p_t` are measured, `L_t` is always available even when t
 
 ### Why most parameters are measured, not just fit
 
-The synthetic tasks have exact ground truth, so at every step we can label the true state (clean, poisoned-syntax, poisoned-semantic) and observe the transitions directly. This means `p_t`, `f_syn(t)`, and both recovery rates are measured from labelled transitions, not inferred from the shape of a curve. `pi` is pinned by the `g_t / p_t` ratio. The structural model mainly supplies a principled way to pool these measurements and to carry them to the real data, where latent states are recovered against gold trajectories.
+The synthetic tasks have exact ground truth, so at every step we can label the true state (clean, poisoned-syntax, poisoned-semantic) and observe the transitions directly. This means `p_t`, `f_syn(t)`, and both recovery rates are measured from labelled transitions, not inferred from the shape of a curve. Concretely, `r_syn` and `r_sem` are measured as the rate at which a context poisoned by each origin returns to an on-track chain on the following step, where "on track" means the value carried in equals the value the gold trajectory expects; the within-step retry-recovery rate is a distinct quantity and is reported separately rather than conflated with it. `pi` is pinned by the `g_t / p_t` ratio. The structural model mainly supplies a principled way to pool these measurements and to carry them to the real data, where latent states are recovered against gold trajectories.
 
 ## 3. Estimation: Bayesian hierarchical model
 
@@ -90,7 +90,7 @@ This is the difference between a fit that quietly explodes on the weakest and mo
 
 ## 4. Model suite
 
-The suite varies one factor at a time so differences in `p_t`, `pi`, and the recovery rates can be attributed to a cause. Versions are pinned by release date at run time and logged.
+The suite varies one factor at a time so differences in `p_t`, `pi`, and the recovery rates can be attributed to a cause. Each model identifier is recorded verbatim, together with the date of the run and the provider's own rate-limit accounting, in the run metadata. **Release dates are not pinned or logged**: the providers used here expose no release or version field on either the model-list or the completion endpoint, so a claim to pin versions by release date could not be honoured. Model identifiers on these hosts are also not stable over time — every identifier in the original configuration had been retired by the time the real run was attempted — so reproduction depends on the recorded identifier plus the run date, and the response cache, rather than on a provider-side version pin.
 
 | Axis | What it isolates | Models |
 |---|---|---|
@@ -105,11 +105,17 @@ Serving is through a single client (LiteLLM): open-weight models on a fast low-c
 
 ### Primary: synthetic, contamination-free, with semantic noise
 
-Each task is a hidden dependency graph over deterministic, executable functions; solving it means traversing the graph and feeding each function the outputs of its predecessors. This gives exact ground truth per call and direct control of dependency depth, at depths `n` in {1, 2, 4, 6, 8} and two or three distractor levels. To avoid sterility we inject semantic noise: natural-language argument values, paraphrased and overlapping tool descriptions, distractor tools with similar names, and free-text fields that must be extracted rather than copied. The exact ground truth is what lets us detect semantic errors that execute without raising an exception, which is essential for the semantic recovery channel.
+Each task is a hidden dependency graph over deterministic, executable functions; solving it means traversing the graph and feeding each function the outputs of its predecessors. This gives exact ground truth per call and direct control of dependency depth, at depths `n` in {1, 2, 4, 6, 8}. The exact ground truth is what lets us detect semantic errors that execute without raising an exception, which is essential for the semantic recovery channel.
 
-### Error-feedback manipulation
+Semantic noise is injected at the prompt surface: paraphrased tool descriptions drawn from overlapping templates, and distractor tools whose names share the same construction as the correct ones. **Two forms of noise described in an earlier version of this plan are not implemented and are not claimed here: natural-language argument values, and free-text fields that must be extracted rather than copied.** Every argument in the generated suite is a single integer reference. This is the same fact that makes the soft argument score vacuous (Section 6), and it is a plausible contributor to the identifiability limitation, since an integer chain under a modulus admits no notion of "close but not quite right" for severity to express itself through. Adding graded arguments would change the task design, so it belongs to the real-benchmark stage rather than being retrofitted to make a metric non-degenerate.
 
-Tool failures are returned in one of two randomised forms: a structured exception naming the offending parameter and expected type, or an opaque generic failure. This manipulation acts on the syntactic channel and is the direct test of H5a and H5b.
+Two task variants are generated. In the **linear** variant the tool order is announced in the prompt and each argument is the previous observation, so only argument values can drift. In the **routing** variant the model is told a parity rule instead of the sequence and must apply it to the value it is carrying, so a corrupted value also sends it down the wrong branch — this is the only variant in which a selection error can propagate, and therefore the only one in which H4 is testable. The routing variant is primary; linear serves as a null control, since a task family with nothing to propagate should return `L_t = 0` and thereby demonstrates the metric does not manufacture effects.
+
+**Distractor levels differ between the two variants and no distractor sweep was run.** The linear generator adds `distractor_level * depth` unused tools with similar names; the routing generator accepts the parameter but ignores it, exposing only the `2 * depth` branch tools, all of which are reachable on some branch. Runs use `distractor_level = 1`, not the two or three levels an earlier version of this plan specified. The consequence is recorded deliberately: the two arms differ in whether never-correct distractors are present, so cross-arm inferences that depend on distractor pressure are not drawn. Since the linear arm is used only as a null control — and a control with *more* distraction that still yields `L_t = 0` is the conservative direction for that argument — the difference is tolerated rather than removed.
+
+### Error-feedback manipulation (implemented, not run)
+
+Tool failures can be returned in either of two forms: a structured exception naming the offending parameter and expected type, or an opaque generic failure. Both are implemented in the executor and selectable by configuration. **Only the structured condition was run.** Exercising the manipulation means repeating the full sweep under the opaque condition, which the free-tier token budget cannot absorb, so H5a and H5b are withdrawn (Section 1) and the condition is reported as available-but-unrun.
 
 ### Secondary: real benchmark, sized to matter
 
@@ -121,7 +127,9 @@ For each task and model:
 
 1. Present schemas and task; collect calls; record raw output, parsed call, and any parse failure.
 2. Score selection against the gold tool.
-3. Score arguments in two stages: schema validity, then value correctness (exact for identifiers and enums, numeric tolerance, normalised or soft match for free text), with strict and soft value scores reported side by side.
+3. Score arguments in two stages: schema validity, then value correctness. **On the synthetic suite the only argument is an integer reference, so the soft score is identical to the strict score by construction** — the numeric tolerance (relative, 1e-9) can never separate two distinct integers, and there are no free-text or enum arguments for a normalised match to act on. Both are logged, but reporting them "side by side" would imply an independent measurement that does not exist, so the synthetic results report the strict score only and say why. The soft scorer is retained for the real-benchmark stage, where arguments do have graded closeness; that is also the setting in which it becomes informative.
+
+   Integer coercion is an explicit scoring decision worth stating: a JSON string containing only digits (e.g. `"40403"`) is coerced to the corresponding integer before comparison, so a provider that stringifies numbers is not penalised for a formatting convention. The schema declares the parameter as an integer, and the intent is to measure whether the model carried the right *value*, not whether it matched a type convention. A non-numeric string is not coerced and remains an error.
 4. Classify each error as syntactic (parse or schema failure) or semantic (executed but wrong tool or value), using the exact ground truth on synthetic tasks and gold trajectories on real ones.
 5. Clean baseline `p_t`: teacher-force the correct upstream history at its true length and measure step-`t` correctness at each depth bin. This yields the dynamic `p_t`, capturing context-length degradation.
 6. Global score: score each step inside the model's own unmodified run to get `g_t`.
@@ -130,7 +138,7 @@ For each task and model:
 
 ### Controlling the function-calling confound
 
-Parse failures are bucketed separately from semantic argument errors, so provider grammar differences show up as parse-failure rate, not as inflated argument error. The headline comparison runs under one uniform calling protocol with a single shared parser across all models. A native-versus-uniform ablation on a fixed subset quantifies the residual and enters the regression as a covariate. Each provider's tool-calling implementation and date is logged.
+Parse failures are bucketed separately from semantic argument errors, so provider grammar differences show up as parse-failure rate, not as inflated argument error. The headline comparison runs under one uniform calling protocol with a single shared parser across all models. A native-versus-uniform ablation on a fixed subset quantifies the residual, reported as a direct contrast (the regression that would have absorbed it as a covariate was not built; see Section 8). The provider, the model identifier and the run date are logged for each model.
 
 ## 7. Metrics
 
@@ -144,7 +152,11 @@ Parse failures are bucketed separately from semantic argument errors, so provide
 
 ## 8. Analysis plan
 
-Supply the measured `p_t`, `f_syn(t)`, and labelled recovery events as data, and fit `pi`, `r_syn`, `r_sem` with the hierarchical model of Section 3. Compare `pi`, `r_syn`, and `r_sem` across the scale axis (H2), across families at matched scale, and between FC-tuned and base models (H3). Test H5a and H5b by contrasting `r_syn` and `r_sem` between the structured-exception and opaque-failure conditions. Regress teacher-forced `p_t` on depth to quantify context degradation (H6). Fit a mixed-effects logistic model of raw per-call outcomes with fixed effects for depth, model, calling mode, feedback condition, and upstream state, and a task random effect, to confirm the depth and recovery effects survive controls. For H4, test whether the selection-to-argument error ratio declines with depth.
+Supply the measured `p_t`, `f_syn(t)`, and labelled recovery events as data, and fit `pi`, `r_syn`, `r_sem` with the hierarchical model of Section 3. Compare `pi`, `r_syn`, and `r_sem` across the scale axis (H2), across families at matched scale, and between FC-tuned and base models (H3). Regress teacher-forced `p_t` on depth to quantify context degradation (H6).
+
+For H4, test whether the selection-to-argument error ratio declines with depth. **This must be resolved by step index, not by task depth.** A depth-8 task contributes steps 0 through 7 to a single depth bin, so pooling within a bin averages away exactly the within-chain trend H4 is about. Measured against a policy configured with a syntactic share rising from 0.20 to 0.80 across steps, the per-depth estimator recovered 0.42 to 0.54: the direction survived, the magnitude did not. The analysis therefore uses a per-step-index aggregation, restricted to steps entered on a clean context so that propagation is not mistaken for a change in the model's error composition.
+
+**Not implemented: the mixed-effects logistic regression.** An earlier version of this plan specified a mixed-effects logistic model of raw per-call outcomes, with fixed effects for depth, model, calling mode, feedback condition and upstream state plus a task random effect, as a robustness check that the depth and recovery effects survive controls, and treated the calling-mode residual as a covariate in it. That model was never built. The hierarchical Bayesian model of Section 3 already conditions on depth, model and family with partial pooling; the calling-mode ablation is reported as a direct contrast rather than as a regression covariate; and the feedback-condition term is moot now that H5 is withdrawn. The claim is removed rather than left standing, and the calling-mode residual is reported as a contrast on a fixed subset.
 
 ### Synthetic versus real, decided in advance
 
@@ -179,7 +191,7 @@ Cost stays bounded by open-weight hosting, a reduced proprietary subset, aggress
 ## 11. Threats to validity
 
 - Context-length degradation: separated from propagation by measuring a dynamic baseline `p_t` at each depth and defining `pi` as a penalty relative to it, so context growth can no longer inflate the severity estimate.
-- Recovery confound: split into syntactic and semantic channels with separate rates, since only syntactic failures raise exceptions; the feedback manipulation is expected to move `r_syn` and leave `r_sem` low, and both are measured directly.
+- Recovery confound: split into syntactic and semantic channels with separate rates, since only syntactic failures raise exceptions. Both are measured directly from labelled transitions, as the rate at which a context poisoned by each origin returns to an on-track chain, and the measured values centre the corresponding priors in the fit. The feedback manipulation that would have moved `r_syn` was not run (H5 withdrawn), so no claim is made about feedback format.
 - Statistical identifiability: handled by a Bayesian hierarchical model with partial pooling and weakly informative priors, with explicit diagnostics; where `pi` and a recovery rate are not separable for a flatlined model, the identifiable `L_t` and floor are reported instead of an overconfident point estimate.
 - Function-calling confound: parse failures separated from semantic errors, headline under a uniform protocol, residual measured by ablation and controlled as a covariate.
 - External validity: the real subset is large enough to stand alone, with a pre-registered rule making it primary on disagreement.

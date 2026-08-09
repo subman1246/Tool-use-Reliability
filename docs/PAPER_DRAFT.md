@@ -312,15 +312,21 @@ argument types.
 ### 3.5 Evaluation protocol
 
 For each task and model, we: (1) present tool schemas and the task; (2) score
-selection (conditionally, per Section 3.4) and arguments, the latter both
-strictly (exact match) and softly (numeric tolerance / normalized string
-match), reported separately; (3) classify each error as syntactic (parse or
-schema failure — caught by the executor, which returns either a structured
-exception or an opaque failure message depending on the experimental
-condition) or semantic (executes but is wrong); (4) measure $p_t$ via
-teacher-forcing; (5) measure $g_t$ via the model's own free-running
-trajectory; (6) measure recovery directly from the logs, as the rate at which
-a poisoned trajectory returns to a correct, on-track chain. Both the
+selection (conditionally, per Section 3.4) and arguments strictly (exact match,
+after coercing digit-only JSON strings to integers so that a provider's number
+formatting is not scored as a value error). A soft score is computed but is
+identical to the strict score on this suite, since every argument is a single
+integer — see Section 7; (3) classify each error as syntactic (parse or schema
+failure, caught by the executor) or semantic (executes but is wrong). The
+executor can return either a structured exception or an opaque failure; only the
+structured condition was run (Section 7); (4) measure $p_t$ via teacher-forcing;
+(5) measure $g_t$ via the model's own free-running trajectory; (6) measure
+recovery directly from the logs, separately by origin, as the rate at which a
+context poisoned syntactically or semantically returns to an on-track chain on
+the following step, where on-track means the value carried in equals the value
+the gold trajectory expects. The within-step retry-recovery rate is a distinct
+quantity and is reported separately rather than folded into $r_{syn}$. These
+measured rates centre the recovery priors in the fit. Both the
 teacher-forced and free-running conditions use the same within-step retry
 budget, so that $p_t$ and $g_t$ are scored under identical rules and their
 ratio is not an artifact of asymmetric retrying.
@@ -570,6 +576,57 @@ tool-reliability evaluation design.]*
 
 ## 7. Limitations
 
+- **Simulation-based validation cannot test channels the mock bypasses.** Three
+  separate defects in this work were invisible to a validation suite that
+  reported a healthy pipeline, and all three share one cause: the simulated
+  policy received information through a channel the real interface does not
+  have. It is called as `policy(task, step, ref, attempt)` and is *handed* the
+  reference value it needs, whereas a real model is handed only a list of
+  messages. The three: (i) the free-running loop appended neither the model's
+  call nor the tool's result to the conversation, so a real model was asked for
+  a value it had never seen, and measured $g_t$ was exactly $1/\text{depth}$;
+  (ii) the linear task family is degenerate on real models ($p_t = g_t = 1$,
+  $L_t = 0$) because the tool order is announced and the argument is a verbatim
+  copy, which no simulated policy revealed because policies err by
+  construction; (iii) the simulated clean baseline was contaminated by
+  cross-run-mode state, driving $L_1$ to $-0.11$ where it is $0$ by
+  construction. Two generalisable rules follow. A mock that receives state
+  out-of-band cannot validate the channel that state is supposed to travel
+  through. And tests must assert on the artifact sent to the provider rather
+  than on the backend's behaviour, because behavioural assertions inherit the
+  mock's blind spots by construction. We report this as a limitation of the
+  methodology rather than as three incidents, because the pattern — not any
+  individual bug — is what a replicator needs to guard against.
+- **Withdrawn hypotheses and unimplemented analyses.** H5a and H5b concerned
+  the error-feedback manipulation. Both feedback modes are implemented, but only
+  the structured condition was run: exercising the manipulation requires
+  repeating the full sweep, which the free-tier token budget cannot absorb. They
+  are withdrawn rather than left listed as though tested. Likewise, an earlier
+  plan specified a mixed-effects logistic model of per-call outcomes as a
+  robustness check and as the vehicle for the calling-mode covariate; it was
+  never built, so the calling-mode residual is reported as a direct contrast and
+  the claim is removed. Release-date version pinning was also specified but is
+  not possible: the providers expose no version field, and every model
+  identifier in the original configuration had been retired by run time, so
+  reproduction rests on the recorded identifier, the run date and the response
+  cache.
+- **Vacuous soft scoring on the synthetic suite.** Every synthetic argument is a
+  single integer, so the soft (tolerance/normalised) score cannot differ from the
+  strict score: a relative tolerance of $10^{-9}$ never separates two distinct
+  integers, and there are no free-text or enum arguments for a normalised match
+  to act on. The synthetic results therefore report the strict score alone. We
+  did not add graded arguments to make the metric non-degenerate, since that
+  would change the task design for the sake of a measurement; it is deferred to
+  the real-benchmark stage, where graded closeness exists naturally and where it
+  is also the direct test of whether $\pi$ becomes better identified.
+- **Distractor pressure differs between task arms.** The linear generator adds
+  never-correct distractor tools; the routing generator exposes only branch
+  tools, all reachable on some branch, and silently ignores the distractor
+  parameter. No distractor sweep was run. Cross-arm inferences that depend on
+  distractor pressure are therefore not drawn. Since linear serves only as a
+  null control, and a control carrying *more* distraction that still yields
+  $L_t = 0$ is the conservative direction for that argument, we tolerate the
+  asymmetry rather than remove it.
 - **Exact-match identifiability.** Section 4.3 establishes, on a fully
   controlled suite where ground truth is known, that the parametric severity/
   recovery model is not cleanly identifiable under exact-match scoring. This

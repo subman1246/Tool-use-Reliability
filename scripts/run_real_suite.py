@@ -39,7 +39,8 @@ from tur.harness.executor import FeedbackMode
 from tur.harness.runner import (run_free, run_teacher_forced, LiteLLMBackend,
                                 RateLimiter, DailyCapReached)
 from tur.analysis.aggregate import (load_records, aggregate_by_depth,
-                                    stats_to_arrays, bootstrap_L_ci)
+                                    stats_to_arrays, bootstrap_L_ci,
+                                    aggregate_by_step, measure_recovery)
 from tur.model.hierarchical import build_and_sample
 
 
@@ -190,6 +191,7 @@ def main():
         [], [], [], [], [], [], {}
     delta_results, L_ci, extra = {}, {}, {}
     extra_filled: dict[str, list[int]] = {}   # model -> depths with substituted inputs
+    recov, per_step = {}, {}
 
     for gi, m in enumerate(models):
         print(f"\n=== running {m['name']} ===")
@@ -262,6 +264,8 @@ def main():
                  f"for {m['name']}")
 
         delta_results[m["name"]] = delta_1(loaded)
+        recov[m["name"]] = measure_recovery(loaded)
+        per_step[m["name"]] = [st.__dict__ for st in aggregate_by_step(loaded)]
         L_ci[m["name"]] = {}
         for d in depths:
             Lp, lo, hi = bootstrap_L_ci(loaded, d, n_boot=1000, seed=13)
@@ -285,10 +289,25 @@ def main():
     successes = np.array(succ_rows); trials = np.array(tri_rows)
     group = np.array(group)
 
+    # measured recovery rates -> informative prior centres, per family
+    G = int(group.max()) + 1
+
+    def fam_mean(key):
+        out = []
+        for g in range(G):
+            vals = [recov[n][key] for i, n in enumerate(names)
+                    if group[i] == g and not np.isnan(recov[n][key])]
+            out.append(float(np.mean(vals)) if vals else float("nan"))
+        return out
+
+    prior_rs, prior_rm = fam_mean("r_syn_chain"), fam_mean("r_sem_chain")
+    print(f"measured recovery -> prior centres: r_syn={prior_rs} r_sem={prior_rm}")
+
     print("\nfitting hierarchical model ...")
     idata = build_and_sample(p, f_syn, successes, trials, group,
                              draws=1500, tune=1500, chains=4, seed=7,
-                             target_accept=0.97)
+                             target_accept=0.97,
+                             prior_r_syn=prior_rs, prior_r_sem=prior_rm)
 
     with open(f"{OUT_DIR}/{tag}_idata.pkl", "wb") as fh:
         pickle.dump(idata, fh)
@@ -299,7 +318,9 @@ def main():
                   "backend_stats": backend_stats, "models_config": models,
                   "delta_1": delta_results, "L_ci": L_ci,
                   "per_depth_extra": extra,
-                  "substituted_input_depths": extra_filled},
+                  "substituted_input_depths": extra_filled,
+                  "measured_recovery": recov, "per_step": per_step,
+                  "priors_used": {"r_syn": prior_rs, "r_sem": prior_rm}},
                  fh, indent=2)
 
     print(f"\nsaved -> {OUT_DIR}/{tag}_idata.pkl, {tag}_meta.json")

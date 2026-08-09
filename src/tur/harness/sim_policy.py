@@ -29,6 +29,29 @@ def _gold_tool_for(task, step: int, ref: int) -> str:
     return task.gold[step].tool  # linear Task: fixed order
 
 
+def _alternative_tool(task, step: int, gold_tool: str, rng) -> str:
+    """A DIFFERENT tool that actually exists in this task's schema.
+
+    A selection error must name a real, callable tool. An earlier version
+    returned f"{gold_tool}_x", which no task defines, so the executor rejected
+    it as an unknown tool and the scorer bucketed it as SYNTACTIC. The
+    consequence was that the simulated suite never produced a semantic selection
+    error at all: measured selection-error share was exactly 0.00 at every step
+    index, so the selection-versus-argument composition that H4 is about could
+    not be exercised even in principle.
+
+    On a RoutingTask the natural wrong choice is the other branch at this step.
+    On a linear Task it is any other tool in the schema, which the distractors
+    supply.
+    """
+    if hasattr(task, "branches"):
+        even_t, odd_t = task.branches[step]
+        other = odd_t if even_t.name == gold_tool else even_t
+        return other.name
+    candidates = [t.name for t in task.tools if t.name != gold_tool]
+    return rng.choice(candidates) if candidates else gold_tool
+
+
 @dataclass
 class SimPolicyConfig:
     name: str
@@ -39,6 +62,11 @@ class SimPolicyConfig:
     r_syn: float
     r_sem: float
     seed: int = 0
+    # Share of SEMANTIC (executing) errors that are selection errors rather than
+    # argument errors. This is the quantity H4 is about, so it is configurable
+    # rather than hard-coded; a policy can now be given a depth-varying
+    # selection share to give the decomposition a known trend to recover.
+    selection_share: float = 0.4
 
 
 class SimPolicy:
@@ -87,10 +115,16 @@ class SimPolicy:
             # this is an in-step retry after a syntactic (parse/schema) failure
             success = rng.random() < cfg.r_syn
             if success:
-                self._set_state(key, (False, None))
-                gold_ref = task.gold[step].args["ref"] if not hasattr(task, "branches") else ref
-                tool = _gold_tool_for(task, step, ref)
-                return tool, {"ref": ref}, True
+                # Fixing a malformed call restores well-formedness, not
+                # correctness: the policy re-emits with whatever ref it holds,
+                # which is still wrong if the context was already corrupted.
+                # Only clear the poisoned flag when the value it is about to
+                # send is in fact the expected one -- clearing unconditionally
+                # claimed a clean context while carrying a wrong value.
+                on_track = ref == task.gold[step].args.get("ref", ref)
+                if on_track:
+                    self._set_state(key, (False, None))
+                return _gold_tool_for(task, step, ref), {"ref": ref}, True
             # still failing: keep sending a malformed call
             return _gold_tool_for(task, step, ref), {}, True
 
@@ -106,8 +140,19 @@ class SimPolicy:
             r = cfg.r_syn if origin == "syntax" else cfg.r_sem
             if rng.random() < r:
                 true_ref = task.gold[step].args.get("ref", ref)
+                # Select the tool from the TRUE ref, not the corrupted one. On a
+                # RoutingTask the correct tool is a function of the value held,
+                # so recovering the value while still branching on the corrupted
+                # value yields a right-value/wrong-tool call that cannot return
+                # the chain to the gold trajectory. Measured effect before this
+                # fix: the policy took its recovery branch at the configured
+                # rate (0.554 against a configured 0.60) while the observable
+                # return-to-track rate was only 0.179, so the routing arm's
+                # ground truth did not match its own configuration. Linear tasks
+                # were unaffected, their tool order being fixed.
+                recovered_tool = _gold_tool_for(task, step, true_ref)
                 self._set_state(key, (False, None))
-                return gold_tool, {"ref": true_ref}, True
+                return recovered_tool, {"ref": true_ref}, True
 
         if rng.random() < eff_p:
             args = {"ref": ref}
@@ -121,12 +166,15 @@ class SimPolicy:
             return gold_tool, {}, True   # missing required 'ref' -> syntactic
         else:
             self._set_state(key, (True, "semantic"))
-            if rng.random() < 0.4:
-                # wrong tool (selection error) -- only meaningful on RoutingTask,
-                # harmless mislabel on a linear Task (still counts as wrong)
-                wrong_tool = f"{gold_tool}_x"
-                return wrong_tool if hasattr(task, "branches") else gold_tool, \
-                       {"ref": ref if not hasattr(task, "branches") else ref + rng.randint(1, 9)}, True
+            if rng.random() < cfg.selection_share:
+                # Selection error: a real, existing tool that is the wrong one.
+                # It executes and returns plausible junk, which is what makes it
+                # semantic rather than syntactic, and it carries the correct
+                # argument so that the selection and argument channels stay
+                # distinguishable in the logs.
+                return _alternative_tool(task, step, gold_tool, rng), \
+                       {"ref": ref}, True
+            # Argument error: right tool, wrong value.
             offset = rng.randint(1, 11)
             return gold_tool, {"ref": ref + offset}, True
 
