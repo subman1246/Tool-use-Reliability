@@ -207,8 +207,23 @@ def measure_recovery(records: list[dict]) -> dict:
                 trials[origin] += 1
                 if rows[i + 1].get("context_clean_in", True):
                     successes[origin] += 1
-            if clean_in and not r["args_correct_strict"]:
-                # a fresh error here sets the origin carried forward
+            if not r["args_correct_strict"]:
+                # Any incorrect step re-labels the origin, whether the context
+                # entering it was clean or already poisoned. An earlier version
+                # only labelled on CLEAN steps, treating origin as a property
+                # fixed at the first fresh error and carried unchanged
+                # afterwards. That is not what the recurrence says and not what
+                # the simulator does: a poisoned step that errors again moves
+                # between the two poisoned states, so its recovery rate becomes
+                # the one for the NEW error type. Under the old definition those
+                # trials were attributed to the original error type while the
+                # policy was drawing against the other rate, which dragged each
+                # measured rate toward the other. Measured effect on the
+                # validation suite: r_syn came out 0.161 against a configured
+                # 0.35 and 0.222 against 0.55 -- roughly half, and worst when
+                # the two configured rates were furthest apart, which is the
+                # signature of exactly this mixing. The bias mattered because
+                # these values are the prior centres for the fit.
                 origin = ("syntax" if r["error_type"] == "syntactic"
                           else "semantic")
             elif clean_in:

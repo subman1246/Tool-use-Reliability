@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from tur.tasks.dag import generate_suite
+from tur.tasks.dag import generate_suite, generate_routing_suite
 from tur.harness.executor import FeedbackMode
 from tur.harness.runner import MockBackend, run_free, run_teacher_forced
 
@@ -78,16 +78,23 @@ def _tokenizer():
         return (lambda s: len(s) // 4), "chars/4 APPROXIMATION"
 
 
-def count_sweep(depths, per_depth, seeds, max_retries, distractor_level):
+def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
+                variant="routing"):
     """Exact call counts and measured prompt-token totals for one model.
 
     Drives the REAL run loops against a mock backend and counts tokens on the
     messages they actually build, rather than reimplementing the prompt
     assembly here. An earlier version duplicated that logic and silently went
     stale the moment the run loop changed, under-reporting the sweep.
+
+    `variant` matters for cost, not just for the science: a routing task carries
+    TWO candidate tools per step plus distractors, so its schema block is about
+    twice the size of a linear task's at the same depth. Estimating the routing
+    sweep with the linear generator understated the token bill.
     """
     ntok, tok_name = _tokenizer()
-    suite = generate_suite(depths, per_depth, distractor_level)
+    gen = generate_routing_suite if variant == "routing" else generate_suite
+    suite = gen(depths, per_depth, distractor_level)
 
     calls_min = 0
     prompt_tokens = 0
@@ -123,12 +130,25 @@ def count_sweep(depths, per_depth, seeds, max_retries, distractor_level):
 
 
 def estimate(depths, per_depth, seeds, max_retries, models, distractor_level=1,
-             days=3, headroom=0.80):
-    s = count_sweep(depths, per_depth, seeds, max_retries, distractor_level)
+             days=3, headroom=0.80, variant="routing", control=None):
+    s = count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
+                    variant)
+    if control:
+        # The control arm is part of the bill, so it is part of the estimate.
+        # Reporting only the primary arm would understate the sweep by exactly
+        # the amount that later shows up as an unexpected cap-stop.
+        c = count_sweep(control["depths"], control["per_depth"], seeds,
+                        max_retries, distractor_level, control["variant"])
+        print(f"Control arm ({control['variant']}, depths={control['depths']}): "
+              f"{c['calls_min']:,} calls, {c['prompt_tokens'] + c['output_tokens']:,} "
+              f"tokens -- included in the totals below")
+        for k in ("tasks", "calls_min", "calls_worst", "prompt_tokens",
+                  "output_tokens"):
+            s[k] += c[k]
     total_tokens = s["prompt_tokens"] + s["output_tokens"]
 
-    print(f"Sweep: depths={depths} seeds={seeds} max_retries={max_retries} "
-          f"distractor_level={distractor_level}")
+    print(f"Sweep: variant={variant} depths={depths} seeds={seeds} "
+          f"max_retries={max_retries} distractor_level={distractor_level}")
     print(f"per_depth: {per_depth}")
     print(f"Token counts via: {s['tokenizer']}")
     print(f"Tasks per seed: {s['tasks']}  |  total tasks: {s['tasks'] * seeds}")
@@ -238,6 +258,14 @@ def main():
     if args.per_depth is not None:
         per_depth = args.per_depth
 
+    ctrl = cfg.get("control_arm") or None
+    if ctrl:
+        c_pd = ctrl.get("per_depth", 20)
+        if isinstance(c_pd, dict):
+            c_pd = {int(k): int(v) for k, v in c_pd.items()}
+        ctrl = {"variant": ctrl.get("task_variant", "linear"),
+                "depths": ctrl.get("depths", [1, 4, 8]), "per_depth": c_pd}
+
     estimate(depths=args.depths or cfg.get("depths", [1, 2, 4, 6, 8]),
              per_depth=per_depth,
              seeds=args.seeds if args.seeds is not None else cfg.get("seeds", 2),
@@ -246,7 +274,8 @@ def main():
              models=cfg.get("models", []),
              distractor_level=(args.distractors if args.distractors is not None
                                else cfg.get("distractor_level", 1)),
-             days=args.days, headroom=args.headroom)
+             days=args.days, headroom=args.headroom,
+             variant=cfg.get("task_variant", "routing"), control=ctrl)
 
 
 if __name__ == "__main__":

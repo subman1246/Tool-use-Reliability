@@ -124,6 +124,11 @@ class SimPolicy:
                 on_track = ref == task.gold[step].args.get("ref", ref)
                 if on_track:
                     self._set_state(key, (False, None))
+                else:
+                    # same re-labelling as the clean-draw path below: the retry
+                    # produced a well-formed call carrying a wrong value, which
+                    # is a semantic corruption from here on
+                    self._set_state(key, (True, "semantic"))
                 return _gold_tool_for(task, step, ref), {"ref": ref}, True
             # still failing: keep sending a malformed call
             return _gold_tool_for(task, step, ref), {}, True
@@ -158,6 +163,23 @@ class SimPolicy:
             args = {"ref": ref}
             if not poisoned:
                 self._set_state(key, (False, None))
+            else:
+                # The draw succeeded, so the call is well formed and names the
+                # right tool -- but the value it carries is the corrupted one, so
+                # what an observer sees is a SEMANTIC error, and from here on the
+                # corruption is a wrong value regardless of how it started. The
+                # origin has to be re-labelled to match, because the recurrence
+                # picks the recovery rate from the state and a log-based measure
+                # can only ever read the observed error type.
+                #
+                # Leaving it as "syntax" here was the last piece of the recovery
+                # measurement gap: the policy kept drawing against r_syn while
+                # the logs attributed the trial to r_sem, so the two measured
+                # rates were each pulled toward the other and the bias was worst
+                # when they were furthest apart (r_syn measured 0.12 against a
+                # configured 0.35). Real models have no hidden origin at all, so
+                # the observable definition is the one both sides must use.
+                self._set_state(key, (True, "semantic"))
             return gold_tool, args, True
 
         # a fresh error occurs this step

@@ -139,7 +139,11 @@ def generate_suite(depths: list[int], per_depth: "int | dict[int, int]",
         n = per_depth[d] if isinstance(per_depth, dict) else per_depth
         for k in range(n):
             seed = base_seed + d * 100003 + k
-            tasks.append(generate_task(f"d{d}_{k}", d, distractor_level, seed))
+            # base_seed belongs in the id: it is what distinguishes one
+            # generator seed's suite from another's. See generate_routing_suite
+            # for what went wrong when it was left out.
+            tasks.append(generate_task(f"d{d}_{k}_s{base_seed}", d,
+                                       distractor_level, seed))
     return tasks
 
 
@@ -208,12 +212,36 @@ def generate_routing_task(task_id: str, depth: int, distractor_level: int = 1,
     return task
 
 
-def generate_routing_suite(depths: list[int], per_depth: int,
+def generate_routing_suite(depths: list[int], per_depth: "int | dict[int, int]",
                            distractor_level: int = 1,
                            base_seed: int = 0) -> list[RoutingTask]:
+    """As generate_suite, for the routing variant.
+
+    task_id embeds base_seed. It did not, and the consequence was severe: every
+    generator seed produced the SAME ids, so a multi-seed run handed two
+    genuinely different tasks the same identifier. Every statistic that groups by
+    task_id then silently merged them:
+
+      measure_recovery  interleaved two unrelated trajectories under one id and
+                        read transitions across the join, which is how a
+                        configured r_syn of 0.35 measured 0.10 at seeds=2 while
+                        measuring 0.34 at seeds=1
+      delta_1           built a {step: correct} dict per id, so the second seed
+                        OVERWROTE the first and half the data was discarded
+                        without any warning
+      bootstrap_L_ci    resampled ids, so each draw pulled a pair of tasks
+                        rather than one, changing the interval width
+
+    None of it raised. The real run uses seeds: 1, where ids happen not to
+    collide, so this is a validation-path defect -- but every multi-seed
+    validation number computed before the fix is affected, which is why the
+    validation was re-run rather than patched in the write-up.
+    """
     tasks: list[RoutingTask] = []
     for d in depths:
-        for k in range(per_depth):
+        n = per_depth[d] if isinstance(per_depth, dict) else per_depth
+        for k in range(n):
             seed = base_seed + 500000 + d * 100003 + k
-            tasks.append(generate_routing_task(f"r{d}_{k}", d, distractor_level, seed))
+            tasks.append(generate_routing_task(f"r{d}_{k}_s{base_seed}", d,
+                                               distractor_level, seed))
     return tasks

@@ -1,4 +1,25 @@
 # experiment configuration
+
+# PRIMARY ARM: routing tasks. The model is told a parity RULE rather than the
+# tool sequence, so it has to apply the rule to the value it is carrying, and a
+# wrong value sends it down the wrong branch. Linear tasks turned out to be
+# degenerate on real models -- both llama models scored p_t = g_t = 1.000 and
+# hence L_t = 0, because the tool order is announced and the argument is a
+# verbatim copy of the previous result, so there were no errors to propagate.
+# Routing produced L_t = 0.500 on the same model at depth 4.
+task_variant: routing
+
+# CONTROL ARM: the linear suite is kept, at low n and a reduced depth grid, as a
+# null control rather than dropped. Its expected result is L_t ~ 0, and reporting
+# that in line is the point: it shows the propagation signal in the primary arm
+# comes from the task structure and not from the harness or the scorer. A shorter
+# grid because a null needs enough n to be a credible null, not enough to trace a
+# curve through.
+control_arm:
+  task_variant: linear
+  depths: [1, 4, 8]
+  per_depth: {1: 20, 4: 20, 8: 20}
+
 depths: [1, 2, 4, 6, 8]
 
 # Per-depth task counts, NOT a uniform count. A depth-8 task issues 8x the
@@ -7,6 +28,17 @@ depths: [1, 2, 4, 6, 8]
 # budget on the least informative bin. This weighting yields ~2,780 calls per
 # model per seed, which fits Groq's 1,000 req/day/model cap over three days.
 # An int is still accepted here and applies to every depth.
+#
+# This allocation was RE-EXAMINED for H4 per-step power and kept. H4 is a claim
+# about how the error mix shifts along a chain, so it is resolved by step index,
+# and a step index i is populated only by tasks of depth > i. Cost, though, is
+# driven by invocations -- sum(n_d * d) = 1,390 per arm per model here -- and a
+# deep task both contributes to more step indices AND costs proportionally more
+# calls. The two scale together, so shifting mass toward depth is close to a
+# no-op for per-step coverage: an exhaustive search over 47,068 allocations under
+# a fixed 1,390-call ceiling (floor of 40 tasks/depth) found NO allocation with a
+# better worst-case usable-step prefix than this one. See docs/METHOD_NOTES for
+# the resulting decision to treat H4 as suite-level rather than per-model.
 per_depth:
   1: 60
   2: 60
