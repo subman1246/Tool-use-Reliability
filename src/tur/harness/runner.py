@@ -456,6 +456,22 @@ def _extract_json(text: str) -> str:
     return cleaned
 
 
+_MAX_ECHO_CHARS = 2000
+
+
+def _assistant_turn(call: ParsedCall) -> str:
+    """Render the model's own turn for the conversation history.
+
+    A well-formed call is echoed in canonical form; anything else is echoed
+    verbatim so the model can see what it actually emitted and, on a retry,
+    correct it. Truncated because a runaway response would otherwise grow the
+    context for every later step of the task.
+    """
+    if call.parse_ok:
+        return json.dumps({"tool": call.tool, "args": call.args})
+    return (call.raw or "")[:_MAX_ECHO_CHARS]
+
+
 def _coerce_ints(args: dict | None) -> dict:
     if not isinstance(args, dict):
         return {}
@@ -563,12 +579,24 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
             score = score_step(call, gold, ex.schema_valid, ex.known_tool,
                                expected_tool=_expected_tool_given_ref(task, t, carried))
             final_score = score
+            # Echo the model's own turn back into the history. Without this the
+            # conversation carries no record of what was called or what came
+            # back, so at step t the model is asked for a ref it was never
+            # shown and can only guess -- g_t then measures the harness, not
+            # propagation. Simulated backends never caught this because they
+            # read the carried ref from _ctx instead of from the history.
+            messages.append({"role": "assistant",
+                             "content": _assistant_turn(call)})
             if ex.ok:
                 executed = True
                 if attempt > 0 and score.correct:
                     recovered = True
                 carried = ex.output
                 stalled = False   # chain is moving again
+                # The observation is the model's OWN result, right or wrong.
+                # That is exactly the channel a semantic error propagates
+                # through: a plausible number that is not the gold one.
+                messages.append({"role": "user", "content": f"result: {ex.output}"})
                 break
             messages.append({"role": "user", "content": ex.feedback})
         if not executed:
@@ -603,6 +631,12 @@ def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
         messages = [{"role": "system", "content": _SYSTEM},
                     {"role": "user", "content": _task_intro(task)}]
         for j in range(t):
+            # The [step j] marker is included so the clean history is
+            # structurally identical to a free run's history at the same depth.
+            # p_t and g_t must differ only in whether that history is CORRECT;
+            # if one mode also carries extra turns the other lacks, the
+            # comparison picks up a prompt-shape difference as well.
+            messages.append({"role": "user", "content": f"[step {j}]"})
             messages.append({"role": "assistant",
                              "content": json.dumps({"tool": task.gold[j].tool,
                                                     "args": task.gold[j].args})})

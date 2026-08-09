@@ -21,7 +21,8 @@ import argparse
 import json
 
 from tur.tasks.dag import generate_suite
-from tur.harness.runner import _SYSTEM, _task_intro
+from tur.harness.executor import FeedbackMode
+from tur.harness.runner import MockBackend, run_free, run_teacher_forced
 
 # Rough $/1M tokens (input, output) for cost accounting only. Every model in the
 # current suite is served on a free tier, hence 0.0 -- the entries exist so a
@@ -78,33 +79,38 @@ def _tokenizer():
 
 
 def count_sweep(depths, per_depth, seeds, max_retries, distractor_level):
-    """Exact call counts and measured prompt-token totals for one model."""
+    """Exact call counts and measured prompt-token totals for one model.
+
+    Drives the REAL run loops against a mock backend and counts tokens on the
+    messages they actually build, rather than reimplementing the prompt
+    assembly here. An earlier version duplicated that logic and silently went
+    stale the moment the run loop changed, under-reporting the sweep.
+    """
     ntok, tok_name = _tokenizer()
     suite = generate_suite(depths, per_depth, distractor_level)
 
     calls_min = 0
     prompt_tokens = 0
+
+    def perfect(task, step, ref, attempt):
+        return task.gold[step].tool, {"ref": ref}, True
+
     for task in suite:
-        base = ntok(_SYSTEM) + ntok(_task_intro(task))
+        for runner in (run_free, run_teacher_forced):
+            counted = {"calls": 0, "tokens": 0}
+            backend = MockBackend(perfect)
+            inner = backend.complete
 
-        # free run: one growing message history across the task's steps
-        cur = base
-        for t in range(task.depth):
-            cur += ntok(f"[step {t}]")
-            prompt_tokens += cur
-            calls_min += 1
+            def complete(messages, tools, mode, _c=counted, _inner=inner):
+                text = "".join(str(m.get("content", "")) for m in messages)
+                _c["tokens"] += ntok(text)
+                _c["calls"] += 1
+                return _inner(messages, tools, mode)
 
-        # teacher-forced: prompt rebuilt from scratch at each step, carrying the
-        # correct history at its true length
-        for t in range(task.depth):
-            c = base
-            for j in range(t):
-                c += ntok(json.dumps({"tool": task.gold[j].tool,
-                                      "args": task.gold[j].args}))
-                c += ntok(f"result: {task.gold[j].output}")
-            c += ntok(f"[step {t}]")
-            prompt_tokens += c
-            calls_min += 1
+            backend.complete = complete
+            runner(task, backend, "uniform", FeedbackMode.STRUCTURED, max_retries)
+            calls_min += counted["calls"]
+            prompt_tokens += counted["tokens"]
 
     return {
         "tasks": len(suite),
