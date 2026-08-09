@@ -7,3 +7,6 @@ data/results/*
 data/cache/
 *.nc
 .ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
