@@ -365,7 +365,10 @@ Six policies across two families ("A", "B"), each at three severity tiers
 (weak/mid/strong), with configured clean baseline, severity, syntactic error
 share, and origin-specific recovery rates (full configuration in Appendix B).
 Each policy ran through the harness at depths $\{1,2,4,6,8\}$, 400 tasks per
-depth (200 $\times$ 2 seeds), in both linear and routing task variants.
+depth (200 $\times$ 2 seeds), on the **linear** task variant. (The routing
+variant is exercised by the stress-test suite but not by this validation run;
+an earlier draft of this section incorrectly claimed both. Section 4.4 explains
+why the distinction matters.)
 
 ### 4.2 Hardening found during validation
 
@@ -434,6 +437,53 @@ designed with. Section 3.4's real-benchmark arguments (which, unlike our
 integer chains, have genuine graded closeness) let us test directly whether
 identifiability improves outside the synthetic setting **[PENDING REAL
 DATA]**.
+
+### 4.4 What this validation can and cannot establish
+
+Validating on simulated policies has a boundary that we state explicitly,
+because we crossed it and were caught by it.
+
+The simulated policy is invoked as `policy(task, step, ref, attempt)`: it is
+*handed* the reference value carried into the step as an argument, delivered
+out-of-band rather than read from the conversation. A real model receives only
+the message list. Those interfaces are not equivalent, and the difference is
+precisely the dependency this study measures.
+
+Because of that, the validation reported above could not detect that the
+free-running loop was appending neither the model's own call nor the tool's
+result to the conversation. Every simulated policy behaved identically whether
+the history was complete or empty, since none of them read it. The validation
+suite reported a healthy pipeline while the run loop could not have worked on
+any real model; the defect surfaced in the first minute of real API traffic and
+had survived 24 stress-test configurations.
+
+We therefore scope this section's claim precisely: **it establishes that the
+estimation and aggregation pipeline recovers configured parameters from labelled
+transitions. It does not establish that the prompt-construction and
+observation-passing path is correct**, and no simulation with an out-of-band
+state interface can establish that. Two generalisable points follow: a mock that
+receives state out-of-band cannot validate the channel that state travels
+through, and tests should assert on the artifact sent to the provider rather than
+on backend behaviour, since behavioural assertions inherit the mock's blind spots
+by construction.
+
+After the defect was fixed, this entire validation run was regenerated and
+compared element-by-element with the pre-fix artifacts. The clean baseline,
+syntactic share, success counts, trial counts, $\Delta_1$ and every bootstrap
+$L_t$ interval were **identical**, for the structural reason above, so the
+findings in Sections 4.2–4.3 stand as reported. The identifiability finding also
+survives: posterior correlations moved from 0.18–0.74 to 0.15–0.76, which is
+sampling noise across a change of environment, not a change in structure.
+
+A separate caveat, not about the defect: this validation used the linear task
+variant, and the real-model pilot subsequently established that linear tasks
+carry no propagation signal on actual models ($p_t = g_t = 1.000$, $L_t = 0$),
+because the tool order is announced and the argument is a verbatim copy of the
+prior observation. The simulated policies still err on linear tasks by
+construction, so the estimator check remains valid, but it was performed on a
+task family whose real-model counterpart is degenerate. The real experiment's
+primary suite is therefore the routing variant, in which a wrong value also sends
+the agent down a wrong branch and selection errors can propagate.
 
 ---
 

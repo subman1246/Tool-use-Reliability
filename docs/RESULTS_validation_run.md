@@ -165,14 +165,14 @@ true configuration monotonically within either family, unlike `L_t` above.
 diagnostic (posterior correlation between `pi` and each recovery rate, per
 model) shows substantial positive correlation everywhere:
 
-| model | posterior pi | corr(pi, r_syn) | corr(pi, r_sem) |
-|---|---|---|---|
-| fam0-weak | 0.24 | +0.51 | +0.47 |
-| fam0-mid | 0.30 | +0.48 | +0.51 |
-| fam0-strong | 0.25 | +0.18 | +0.67 |
-| fam1-weak | 0.29 | +0.52 | +0.37 |
-| fam1-mid | 0.39 | +0.54 | +0.47 |
-| fam1-strong | 0.37 | +0.22 | +0.74 |
+| model | true pi | posterior pi | corr(pi, r_syn) | corr(pi, r_sem) |
+|---|---|---|---|---|
+| fam0-weak | 0.70 | 0.238 | +0.50 | +0.46 |
+| fam0-mid | 0.45 | 0.303 | +0.47 | +0.50 |
+| fam0-strong | 0.22 | 0.253 | +0.15 | +0.66 |
+| fam1-weak | 0.65 | 0.288 | +0.53 | +0.35 |
+| fam1-mid | 0.40 | 0.387 | +0.53 | +0.48 |
+| fam1-strong | 0.18 | 0.373 | +0.22 | +0.76 |
 
 Note that this finding **survived the entire second hardening round**. The
 conditional-selection fix, the stalled-chain flag, and the fresh-error `f_syn`
@@ -180,6 +180,13 @@ estimator all changed the inputs to this fit, and the correlation structure
 persisted (0.18-0.74). That rules out the obvious explanation that it was an
 artifact of one of those measurement bugs, and strengthens the case that it is
 structural.
+
+**It also survived the observation-loop fix (verified, see Section 9).** The
+absolute `pi` error is large — up to 0.46 for `fam0-weak` — and the ordering is
+not merely compressed but effectively absent: within each family the posterior
+means span roughly 0.24-0.30 (fam0) and 0.29-0.39 (fam1) while the true values
+span 0.22-0.70 and 0.18-0.65. `pi` is not recovered here in any useful sense,
+and no claim in this document rests on it.
 
 This is the exact diagnostic signature the methodology's threats-to-validity
 section flagged as a risk when the model-free R (recovery) and the fitted
@@ -242,6 +249,52 @@ family-level hyperparameters. No divergences, R-hat ≤ 1.001 across all
 reported parameters, ESS in the thousands. Sampling itself is not the
 bottleneck; the identifiability limitation in Section 6 is structural, not a
 symptom of insufficient sampling.
+
+## 8b. Re-verification after the observation-loop fix (2026-08-09)
+
+The first real-model pilot found that `run_free` appended neither the model's
+call nor the tool's result to the conversation, so a real model was asked at step
+`t` for a reference value it had never seen (details in
+`docs/METHOD_NOTES_real_run.md`). The obvious worry is that this document
+describes a harness artifact. **It does not**, and that was checked rather than
+argued.
+
+This entire run was regenerated from scratch after the fix and compared
+element-by-element against the pre-fix artifacts:
+
+| Quantity | Pre-fix vs post-fix |
+|---|---|
+| `p` (clean baseline, all models × depths) | **identical** |
+| `f_syn` | **identical** |
+| `successes`, `trials` | **identical** |
+| `delta_1` (all fields, all models) | **identical** |
+| `L_ci` (L, lo, hi at every depth) | **identical** |
+
+The reason is structural: `SimPolicy` is invoked as
+`policy(task, step, ref, attempt)` and is *handed* the carried reference value
+out-of-band through the runner's `_ctx`. It never reads the message history, so
+repairing that history cannot change a single simulated decision. The corollary
+is the important one and is recorded as a limitation in the method notes: **this
+validation run tests the fitting and aggregation pipeline, and structurally
+cannot test the prompt-construction and observation-passing path.** Only a real
+model exercises that. The bug survived 24 stress-test configurations and surfaced
+in the first minute of real API traffic.
+
+The identifiability finding **survives unchanged**. Posterior correlations moved
+from a 0.18-0.74 range to 0.15-0.76 — sampling noise, not a change in structure
+(this re-run also moved from the original environment to pymc 6.2.0 / arviz
+1.2.0). MCMC health is equal or better: max R-hat 1.0034, min ESS 4507, zero
+divergences at `target_accept` 0.97.
+
+One caveat this exercise did surface, which is *not* about the fix. This
+validation ran on the **linear** task suite, and the real-model pilot has since
+shown that linear tasks produce no propagation signal whatsoever on actual models
+(`p_t = g_t = 1.000`, `L_t = 0`). The simulated policies still generate errors on
+linear tasks because `SimPolicy` injects them by construction, so the fit
+validation remains sound. But it validates the estimator on a task family whose
+real-model counterpart is degenerate, and the real run's primary suite is
+therefore the routing variant. Re-validating on routing tasks would make the
+simulated and real arms directly comparable and is recorded as outstanding.
 
 ## 9. New observables added during hardening
 

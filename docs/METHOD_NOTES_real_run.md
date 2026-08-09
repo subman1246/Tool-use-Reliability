@@ -176,3 +176,48 @@ Both run modes now build structurally identical histories, so `p_t` and `g_t`
 differ only in whether that history is *correct*; with a perfect policy the two
 are byte-identical. `tests/test_observation_loop.py` asserts against the message
 history directly, which is the thing the mock bypasses.
+
+### Limitation: simulation-based validation cannot test the channel the mock bypasses
+
+This is the generalisable lesson, and it is a limitation of the validation
+methodology rather than an implementation slip.
+
+The mock backend's interface was **too generous**. `SimPolicy` is called as
+`policy(task, step, ref, attempt)` — it is *handed* the reference value it needs
+as a positional argument, delivered out-of-band through a `_ctx` dictionary the
+runner stashes on the last message. A real backend receives one thing only: the
+list of messages. The two interfaces are not equivalent, and the difference is
+exactly the dependency the experiment exists to measure.
+
+Consequently the simulated suite could not observe that the message history was
+missing every observation. Every simulated policy behaved identically whether
+the history was complete, truncated, or empty, because none of them read it. The
+validation suite reported a healthy pipeline — correct `p_t` decline, plausible
+`g_t`, recovered `pi` within 0.15, good MCMC diagnostics — while the run loop it
+was validating could not have worked on any real model.
+
+Two corollaries worth stating for anyone building a similar harness:
+
+1. **A mock that receives state out-of-band cannot validate the channel that
+   state is supposed to travel through.** If the quantity under study is "does
+   information reach the model", the mock must be forced to obtain that
+   information the same way the model does. A stricter mock here would have
+   parsed its `ref` out of the message history and failed loudly when it was
+   absent — which is what a real model effectively did the moment one was
+   attached.
+
+2. **Tests must assert on the artifact sent to the provider, not on the
+   backend's behaviour.** Behavioural assertions inherit the mock's blind spots
+   by construction. `tests/test_observation_loop.py` therefore captures the
+   `messages` list at each backend call and asserts on its structure and
+   contents directly: that the ref a step needs appears somewhere in its
+   history, that observations and assistant turns are present, and that the free
+   and teacher-forced histories are byte-identical under a perfect policy. Those
+   assertions hold regardless of what any backend chooses to read.
+
+The practical implication for this study is scoping: the simulated validation
+run demonstrates that the **fitting and aggregation** pipeline recovers known
+parameters from labelled transitions. It does not, and structurally cannot,
+validate the **prompt-construction and observation-passing** path. Only a real
+model exercises that, which is why this bug surfaced in the first pilot minute
+of real API traffic and not in any of the 24 stress-test configurations.
