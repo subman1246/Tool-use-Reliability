@@ -50,8 +50,15 @@ models:
   # --- family axis at matched scale ---
   - {name: "groq/qwen/qwen3.6-27b",        family: "qwen",    scale: 27,  provider: "groq"}
   - {name: "groq/allam-2-7b",              family: "allam",   scale: 7,   provider: "groq"}
-  # --- proprietary reference; scale null = undisclosed, excluded from fig4 ---
-  - {name: "gemini/gemini-2.5-flash",      family: "gemini",  scale: null, provider: "gemini"}
+  # --- proprietary reference: DISABLED, no working key ---
+  # The Gemini key in .env returns 403 PERMISSION_DENIED ("Your project has
+  # been denied access") on generateContent, confirmed against the raw REST
+  # endpoint so it is not a LiteLLM routing issue. Listing models works, so the
+  # key is valid but the project is blocked. Re-enable this single line once a
+  # key from a fresh project is in .env; the response cache is per-model, so
+  # adding it later costs nothing already spent on the six models above.
+  # scale null = undisclosed parameter count, excluded from fig4 by design.
+  # - {name: "gemini/gemini-2.5-flash",    family: "gemini",  scale: null, provider: "gemini"}
 
 paths:
   results: data/results

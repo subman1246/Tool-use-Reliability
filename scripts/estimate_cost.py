@@ -1,33 +1,58 @@
-"""Estimate the call volume and rough cost of a real run BEFORE spending any
-API budget. Run this first in Claude Code, before scripts/run_real_suite.py.
+"""Estimate call volume, token volume and rate-limit feasibility of a real run
+BEFORE spending any API budget. Run this first, before scripts/run_real_suite.py.
 
 This does not call any model. It counts exactly how many backend calls the
-configured sweep will make (accounting for retries and both run modes) and
-multiplies by rough per-1k-token prices, using approximate token counts from
-the actual prompts the harness builds.
+configured sweep will make (both run modes, with and without retries), counts
+the prompt tokens the harness actually builds with a real tokenizer, and checks
+the result against each provider's measured rate limits.
+
+The rate-limit check is the point of this script. On free tiers the money cost
+is zero and the binding constraint is throughput -- specifically tokens per
+minute, which is far more restrictive than the headline requests-per-day figure
+that provider docs lead with. A sweep can be well inside its daily request cap
+and still take nine hours per model.
+
+Config is the source of truth; CLI flags override it for what-if analysis.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 
 from tur.tasks.dag import generate_suite
-from tur.harness.runner import _task_intro
+from tur.harness.runner import _SYSTEM, _task_intro
 
-# Rough, approximate $/1M tokens (input, output). Update before a real run --
-# these are ballpark figures for budgeting only, not billing-accurate.
+# Rough $/1M tokens (input, output) for cost accounting only. Every model in the
+# current suite is served on a free tier, hence 0.0 -- the entries exist so a
+# paid model added later is still costed rather than silently reported as free.
 PRICE_PER_1M = {
+    "groq/": (0.0, 0.0),                 # Groq free tier
+    "gemini/": (0.0, 0.0),               # Gemini API free tier
+    "openrouter/": (0.0, 0.0),           # OpenRouter :free models
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
     "claude-haiku": (0.80, 4.00),
     "claude-sonnet": (3.00, 15.00),
-    "groq/qwen2.5-7b-instruct": (0.05, 0.08),
-    "groq/qwen2.5-32b-instruct": (0.29, 0.39),
-    "groq/qwen2.5-72b-instruct": (0.59, 0.79),
-    "groq/llama-3.1-8b-instruct": (0.05, 0.08),
     "default_open_weight": (0.20, 0.20),
     "default_proprietary": (1.00, 3.00),
 }
+
+# Measured from provider response headers on 2026-08-09 (x-ratelimit-limit-*),
+# not taken from documentation -- the docs quote an org-wide 14,400 req/day for
+# Groq, but the enforced limit is per model and is 1,000/day for most of them.
+# {model: (requests_per_day, tokens_per_minute)}; None = unknown/unpublished.
+RATE_LIMITS = {
+    "groq/llama-3.1-8b-instant":    (14400, 6000),
+    "groq/llama-3.3-70b-versatile": (1000, 12000),
+    "groq/qwen/qwen3.6-27b":        (1000, 8000),
+    "groq/openai/gpt-oss-20b":      (1000, 8000),
+    "groq/openai/gpt-oss-120b":     (1000, 8000),
+    "groq/allam-2-7b":              (7000, 6000),
+    "gemini/gemini-2.5-flash":      (None, None),
+}
+
+_OUTPUT_TOKENS_PER_CALL = 40   # one short JSON call
 
 
 def _price_for(model: str) -> tuple[float, float]:
@@ -38,68 +63,184 @@ def _price_for(model: str) -> tuple[float, float]:
                         else "default_open_weight"]
 
 
-def estimate(depths: list[int], per_depth: int, seeds: int, max_retries: int,
-            models: list[dict], distractor_level: int = 1) -> None:
+def _tokenizer():
+    """Real tokenizer if available, else a chars/4 fallback.
+
+    The fallback is flagged in the output because it materially changes the
+    TPM feasibility verdict, which is the number this script exists to produce.
+    """
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("o200k_base")
+        return (lambda s: len(enc.encode(s))), "tiktoken/o200k_base"
+    except Exception:
+        return (lambda s: len(s) // 4), "chars/4 APPROXIMATION"
+
+
+def count_sweep(depths, per_depth, seeds, max_retries, distractor_level):
+    """Exact call counts and measured prompt-token totals for one model."""
+    ntok, tok_name = _tokenizer()
     suite = generate_suite(depths, per_depth, distractor_level)
-    # rough token estimate: ~4 chars/token, prompt grows with depth and
-    # schema size; output is short (one JSON call)
-    total_prompt_chars = 0
-    total_calls_per_seed = 0
+
+    calls_min = 0
+    prompt_tokens = 0
     for task in suite:
-        intro_len = len(_task_intro(task))
-        # each step of the free run re-sends the growing message history;
-        # teacher-forced does the same but rebuilt fresh each step
-        for step in range(task.depth):
-            # both run modes call once per step in the best case, up to
-            # (max_retries+1) times if every attempt fails
-            total_calls_per_seed += 2 * (max_retries + 1)
-            total_prompt_chars += 2 * (intro_len + 200 * step)  # +history growth
+        base = ntok(_SYSTEM) + ntok(_task_intro(task))
 
-    total_calls = total_calls_per_seed * seeds
-    est_input_tokens = total_prompt_chars * seeds / 4
-    est_output_tokens = total_calls * 40  # a short JSON call is ~40 tokens
+        # free run: one growing message history across the task's steps
+        cur = base
+        for t in range(task.depth):
+            cur += ntok(f"[step {t}]")
+            prompt_tokens += cur
+            calls_min += 1
 
-    print(f"Sweep: depths={depths} per_depth={per_depth} seeds={seeds} "
-         f"max_retries={max_retries} distractor_level={distractor_level}")
-    print(f"Tasks per seed: {len(suite)}  |  Total tasks: {len(suite) * seeds}")
-    print(f"Worst-case backend calls PER MODEL: {total_calls:,}")
-    print(f"Approx input tokens PER MODEL: {est_input_tokens:,.0f}  "
-         f"(worst case, assumes every retry fires)")
-    print(f"Approx output tokens PER MODEL: {est_output_tokens:,.0f}\n")
+        # teacher-forced: prompt rebuilt from scratch at each step, carrying the
+        # correct history at its true length
+        for t in range(task.depth):
+            c = base
+            for j in range(t):
+                c += ntok(json.dumps({"tool": task.gold[j].tool,
+                                      "args": task.gold[j].args}))
+                c += ntok(f"result: {task.gold[j].output}")
+            c += ntok(f"[step {t}]")
+            prompt_tokens += c
+            calls_min += 1
 
-    print(f"{'model':<32}{'est. cost (worst case)':>26}{'est. cost (typical, ~40%)':>28}")
-    grand_total = 0.0
+    return {
+        "tasks": len(suite),
+        "tokenizer": tok_name,
+        "calls_min": calls_min * seeds,
+        "calls_worst": calls_min * (max_retries + 1) * seeds,
+        "prompt_tokens": prompt_tokens * seeds,
+        "output_tokens": calls_min * seeds * _OUTPUT_TOKENS_PER_CALL,
+    }
+
+
+def estimate(depths, per_depth, seeds, max_retries, models, distractor_level=1,
+             days=3, headroom=0.80):
+    s = count_sweep(depths, per_depth, seeds, max_retries, distractor_level)
+    total_tokens = s["prompt_tokens"] + s["output_tokens"]
+
+    print(f"Sweep: depths={depths} seeds={seeds} max_retries={max_retries} "
+          f"distractor_level={distractor_level}")
+    print(f"per_depth: {per_depth}")
+    print(f"Token counts via: {s['tokenizer']}")
+    print(f"Tasks per seed: {s['tasks']}  |  total tasks: {s['tasks'] * seeds}")
+    print()
+    print(f"PER MODEL:")
+    print(f"  backend calls, no retries : {s['calls_min']:,}")
+    print(f"  backend calls, worst case : {s['calls_worst']:,}  "
+          f"(every step exhausts {max_retries} retry)")
+    print(f"  prompt tokens             : {s['prompt_tokens']:,}")
+    print(f"  output tokens (est.)      : {s['output_tokens']:,}")
+    print(f"  total tokens              : {total_tokens:,}")
+    print(f"  avg tokens/call           : {total_tokens / max(s['calls_min'], 1):,.0f}")
+    print()
+
+    # ---- cost ----
+    print(f"{'model':<34}{'worst-case $':>14}{'typical $':>12}")
+    print("-" * 60)
+    grand = 0.0
     for m in models:
         name = m["name"] if isinstance(m, dict) else m
-        in_price, out_price = _price_for(name)
-        worst = (est_input_tokens / 1e6) * in_price + (est_output_tokens / 1e6) * out_price
-        typical = worst * 0.4  # most retries don't fire; this is a rough haircut
-        grand_total += typical
-        print(f"{name:<32}{'$' + format(worst, ',.2f'):>26}{'$' + format(typical, ',.2f'):>28}")
-    print(f"\nEstimated TOTAL across all models (typical case): ${grand_total:,.2f}")
-    print("\nThese are rough estimates for budgeting only. Actual cost depends on\n"
-         "real retry rates, actual token counts, and current provider pricing.\n"
-         "Update PRICE_PER_1M in this file with current prices before relying on this.")
+        pin, pout = _price_for(name)
+        worst = (s["prompt_tokens"] * (max_retries + 1) / 1e6) * pin \
+            + (s["output_tokens"] * (max_retries + 1) / 1e6) * pout
+        typical = (s["prompt_tokens"] / 1e6) * pin + (s["output_tokens"] / 1e6) * pout
+        grand += typical
+        print(f"{name:<34}{'$' + format(worst, ',.2f'):>14}"
+              f"{'$' + format(typical, ',.2f'):>12}")
+    print("-" * 60)
+    print(f"{'TOTAL (typical)':<34}{'':>14}{'$' + format(grand, ',.2f'):>12}")
+    print()
+
+    # ---- rate-limit feasibility: the actual constraint ----
+    print("RATE-LIMIT FEASIBILITY (limits measured from response headers)")
+    print(f"  pacing at {headroom:.0%} of each TPM ceiling, spread over {days} day(s)")
+    print()
+    print(f"{'model':<34}{'RPD':>7}{'req/day':>9}{'days':>6}{'TPM':>7}{'hours':>7}  verdict")
+    print("-" * 88)
+    infeasible, warnings = [], []
+    for m in models:
+        name = m["name"] if isinstance(m, dict) else m
+        rpd, tpm = RATE_LIMITS.get(name, (None, None))
+        per_day_calls = s["calls_min"] / days
+        if rpd is None:
+            print(f"{name:<34}{'?':>7}{per_day_calls:>9,.0f}{'?':>6}{'?':>7}{'?':>7}"
+                  f"  UNKNOWN LIMITS -- verify before running")
+            warnings.append(name)
+            continue
+        days_needed = s["calls_min"] / rpd
+        hours = total_tokens / (tpm * headroom) / 60
+        ok_rpd = per_day_calls <= rpd
+        ok_worst = (s["calls_worst"] / days) <= rpd
+        if not ok_rpd:
+            verdict, bad = "EXCEEDS RPD", True
+        elif not ok_worst:
+            verdict, bad = "ok, but worst-case retries exceed RPD", False
+            warnings.append(name)
+        else:
+            verdict, bad = "ok", False
+        if bad:
+            infeasible.append(name)
+        print(f"{name:<34}{rpd:>7,}{per_day_calls:>9,.0f}{days_needed:>6.1f}"
+              f"{tpm:>7,}{hours:>7.1f}  {verdict}")
+    print("-" * 88)
+    print()
+    if infeasible:
+        print(f"!! {len(infeasible)} model(s) exceed their daily request cap: "
+              f"{infeasible}")
+        print("   Reduce per_depth, reduce seeds, or raise --days.")
+    if warnings:
+        print(f"!  worst-case retry volume or unknown limits for: {warnings}")
+        print("   Retries only fire on syntactic failures, so the realistic")
+        print("   volume sits between the two figures; the pacer + stop-on-cap")
+        print("   in run_real_suite.py is what keeps this safe.")
+    if not infeasible and not warnings:
+        print("All models fit inside their measured caps at this configuration.")
+    print()
+    print("Wall-clock hours above are per model and assume the run is TPM-bound,")
+    print("which on these free tiers it is. Models are run sequentially, so the")
+    print("total is the sum of the hours column.")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--depths", type=int, nargs="+", default=[1, 2, 4, 6, 8])
-    ap.add_argument("--per-depth", type=int, default=200)
-    ap.add_argument("--seeds", type=int, default=2)
-    ap.add_argument("--max-retries", type=int, default=1)
-    ap.add_argument("--distractors", type=int, default=1)
+    ap.add_argument("--config", default="config/default.yaml")
+    ap.add_argument("--depths", type=int, nargs="+", default=None)
+    ap.add_argument("--per-depth", type=int, default=None,
+                    help="override the config's per-depth allocation with a "
+                         "single uniform count (what-if analysis)")
+    ap.add_argument("--seeds", type=int, default=None)
+    ap.add_argument("--max-retries", type=int, default=None)
+    ap.add_argument("--distractors", type=int, default=None)
+    ap.add_argument("--days", type=int, default=3,
+                    help="days the sweep is spread over (default: %(default)s)")
+    ap.add_argument("--headroom", type=float, default=0.80,
+                    help="fraction of each TPM ceiling to pace at")
     args = ap.parse_args()
 
     import yaml
     try:
-        cfg = yaml.safe_load(open("config/default.yaml"))
-        models = cfg.get("models", [])
+        cfg = yaml.safe_load(open(args.config))
     except FileNotFoundError:
-        models = [{"name": "gpt-4o-mini"}, {"name": "groq/qwen2.5-7b-instruct"}]
+        raise SystemExit(f"no config at {args.config}")
 
-    estimate(args.depths, args.per_depth, args.seeds, args.max_retries,
-             models, args.distractors)
+    per_depth = cfg.get("per_depth", 200)
+    if isinstance(per_depth, dict):
+        per_depth = {int(k): int(v) for k, v in per_depth.items()}
+    if args.per_depth is not None:
+        per_depth = args.per_depth
+
+    estimate(depths=args.depths or cfg.get("depths", [1, 2, 4, 6, 8]),
+             per_depth=per_depth,
+             seeds=args.seeds if args.seeds is not None else cfg.get("seeds", 2),
+             max_retries=(args.max_retries if args.max_retries is not None
+                          else cfg.get("max_retries", 1)),
+             models=cfg.get("models", []),
+             distractor_level=(args.distractors if args.distractors is not None
+                               else cfg.get("distractor_level", 1)),
+             days=args.days, headroom=args.headroom)
 
 
 if __name__ == "__main__":
