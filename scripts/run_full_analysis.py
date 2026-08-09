@@ -40,10 +40,18 @@ def run_policy(cfg: SimPolicyConfig) -> list[dict]:
         suite = generate_suite(DEPTHS, PER_DEPTH, distractor_level=1,
                                base_seed=seed * 31 + 1000)
         for task in suite:
+            # The policy carries poisoned state between calls, so it must be
+            # told which run mode is asking. Teacher forcing supplies a correct
+            # upstream history by construction; without `stateless` the free
+            # run's corruption leaked into the clean baseline and drove L_1
+            # negative when it is 0 by construction.
+            policy.stateless = False
             f = run_free(task, backend, "uniform", FeedbackMode.STRUCTURED,
                         max_retries=1)
+            policy.stateless = True
             t = run_teacher_forced(task, backend, "uniform",
                                    FeedbackMode.STRUCTURED, max_retries=1)
+            policy.stateless = False
             records += [r.__dict__ for r in f] + [r.__dict__ for r in t]
     return records
 

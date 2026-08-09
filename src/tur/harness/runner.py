@@ -91,13 +91,21 @@ class RateLimiter:
     """
 
     def __init__(self, tpm: int | None = None, rpd: int | None = None,
-                 headroom: float = 0.80, reserve_requests: int = 5):
+                 headroom: float = 0.80, reserve_requests: int = 5,
+                 tpd: int | None = None):
         self.tpm = tpm
         self.rpd = rpd
+        # Tokens per day. Enforced by the provider but exposed in NO response
+        # header -- it surfaces only in the 429 body -- so this is seeded as a
+        # LOWER BOUND from prior observation and corrected upward the moment the
+        # provider tells us the real figure (see discovered_tpd).
+        self.tpd = tpd
         self.headroom = headroom
         self.reserve_requests = reserve_requests
         self._window: deque[tuple[float, int]] = deque()  # (ts, tokens)
         self.n_requests = 0
+        self.tokens_today = 0
+        self.discovered_tpd: int | None = None
         self.remaining_requests: int | None = None
         self.remaining_tokens: int | None = None
         self.sleep_seconds = 0.0
@@ -122,6 +130,14 @@ class RateLimiter:
             raise DailyCapReached(
                 f"provider reports only {self.remaining_requests} requests "
                 f"remaining (reserve={self.reserve_requests})")
+        effective_tpd = self.discovered_tpd or self.tpd
+        if effective_tpd is not None and \
+                self.tokens_today + est_tokens > effective_tpd * self.headroom:
+            raise DailyCapReached(
+                f"projected token use {self.tokens_today + est_tokens:,} would "
+                f"exceed {self.headroom:.0%} of the daily token budget "
+                f"{effective_tpd:,}"
+                f"{' (discovered)' if self.discovered_tpd else ' (assumed lower bound)'}")
         if self.tpm:
             while True:
                 now = time.time()
@@ -132,9 +148,10 @@ class RateLimiter:
                 self.sleep_seconds += max(wait, 0.0)
                 time.sleep(max(wait, 0.0))
             self._window.append((time.time(), est_tokens))
-        # Counted whether or not a TPM ceiling is configured -- this is the
-        # figure the daily cap is checked against.
+        # Counted whether or not a TPM ceiling is configured -- these are the
+        # figures the daily caps are checked against.
         self.n_requests += 1
+        self.tokens_today += est_tokens
 
     def sync_from_headers(self, headers: dict) -> None:
         """Adopt the provider's own remaining-quota accounting when exposed."""
@@ -151,8 +168,15 @@ class RateLimiter:
         except (TypeError, ValueError):
             pass
 
+    def note_discovered_tpd(self, limit: int) -> None:
+        """Record a tokens-per-day figure learned from a provider error."""
+        if limit and (self.discovered_tpd is None or limit != self.discovered_tpd):
+            self.discovered_tpd = int(limit)
+
     def stats(self) -> dict:
         return {"n_requests": self.n_requests, "tpm": self.tpm, "rpd": self.rpd,
+                "tpd_assumed": self.tpd, "tpd_discovered": self.discovered_tpd,
+                "tokens_today": self.tokens_today,
                 "headroom": self.headroom,
                 "remaining_requests": self.remaining_requests,
                 "remaining_tokens": self.remaining_tokens,
@@ -186,6 +210,31 @@ _DAILY_CAP_MARKERS = ("per day", "requests per day", "rpd", "daily limit",
                       "daily quota", "quota exceeded", "exceeded your current quota",
                       "resource_exhausted", "resource exhausted",
                       "insufficient_quota")
+
+
+_TPD_LIMIT_RE = re.compile(r"limit\s+(\d[\d,_]*)", re.I)
+
+
+def _parse_daily_token_limit(err: Exception) -> int | None:
+    """Extract the tokens-per-day figure from a provider rate-limit message.
+
+    Groq's 429 body is the only place this number appears -- it is absent from
+    every x-ratelimit-* header and from the published docs -- and it reads e.g.
+    "on tokens per day (TPD): Limit 200000, Used 199895, Requested 2890".
+    Capturing it turns an opaque failure into a measured constraint that the
+    next day's run can plan against.
+    """
+    msg = str(err)
+    low = msg.lower()
+    if "token" not in low or not any(k in low for k in ("per day", "tpd")):
+        return None
+    m = _TPD_LIMIT_RE.search(msg)
+    if not m:
+        return None
+    try:
+        return int(m.group(1).replace(",", "").replace("_", ""))
+    except ValueError:
+        return None
 
 
 def _is_daily_cap_error(err: Exception) -> bool:
@@ -284,7 +333,13 @@ class LiteLLMBackend:
                 last_err = e
                 if _is_daily_cap_error(e):
                     # No backoff will clear this; retrying spends the little
-                    # allowance left on calls that cannot succeed.
+                    # allowance left on calls that cannot succeed. Capture the
+                    # daily token limit if the provider named it -- this is the
+                    # only place it is ever stated.
+                    if self.limiter is not None:
+                        found = _parse_daily_token_limit(e)
+                        if found:
+                            self.limiter.note_discovered_tpd(found)
                     raise DailyCapReached(
                         f"provider signalled a daily/quota limit for "
                         f"{self.model}: {e}") from e
@@ -513,8 +568,38 @@ _SYSTEM = ("You are a tool-using agent. At each step call exactly one tool. "
            "Respond in the requested format only.")
 
 
-def _task_intro(task) -> str:
-    schema = json.dumps(task.schema_view(), indent=0)
+def _render_schema(tools: list[dict], style: str = "verbose") -> str:
+    """Serialise the tool schema for the prompt.
+
+    Two renderings carrying IDENTICAL information -- every tool name, parameter
+    name, parameter type, requiredness, and the full description text:
+
+      verbose : the original indented JSON dump.
+      compact : one line per tool, `- name(param:type, other:type?): description`,
+                where a trailing ? marks an optional parameter.
+
+    This exists because the schema is re-sent with every API call (the provider
+    is stateless, so each call carries the whole conversation, and the intro
+    sits at the head of it). At depth 8 the schema is roughly three quarters of
+    all tokens spent, so its serialisation -- not the number of steps -- is the
+    dominant cost driver. Switching rendering changes what the model sees, so
+    the choice is validated empirically rather than assumed neutral.
+    """
+    if style == "compact":
+        lines = []
+        for t in tools:
+            params = ", ".join(
+                f"{n}:{meta['type']}" + ("" if meta["required"] else "?")
+                for n, meta in t["parameters"].items())
+            lines.append(f"- {t['name']}({params}): {t['description']}")
+        return "\n".join(lines)
+    if style != "verbose":
+        raise ValueError(f"unknown schema style {style!r}")
+    return json.dumps(tools, indent=0)
+
+
+def _task_intro(task, schema_style: str = "verbose") -> str:
+    schema = _render_schema(task.schema_view(), schema_style)
     if hasattr(task, "routing_rule_text"):  # RoutingTask
         return (f"Tools available:\n{schema}\n\n"
                 f"Perform {task.depth} steps. At each step, choose the tool "
@@ -554,10 +639,11 @@ def _expected_tool_given_ref(task, step: int, ref):
 
 def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
              feedback: FeedbackMode = FeedbackMode.STRUCTURED,
-             max_retries: int = 1) -> list[StepRecord]:
+             max_retries: int = 1,
+             schema_style: str = "verbose") -> list[StepRecord]:
     records: list[StepRecord] = []
     messages = [{"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": _task_intro(task)}]
+                {"role": "user", "content": _task_intro(task, schema_style)}]
     carried = task.seed_value
     stalled = False   # a prior step exhausted retries without ever executing
     for t, gold in enumerate(task.gold):
@@ -618,7 +704,8 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
 
 def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
                        feedback: FeedbackMode = FeedbackMode.STRUCTURED,
-                       max_retries: int = 1) -> list[StepRecord]:
+                       max_retries: int = 1,
+                       schema_style: str = "verbose") -> list[StepRecord]:
     """Measure p_t: present the correct history at its true length, ask step t.
 
     Uses the same within-step retry budget as run_free so that p_t and g_t are
@@ -629,7 +716,7 @@ def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
     records: list[StepRecord] = []
     for t, gold in enumerate(task.gold):
         messages = [{"role": "system", "content": _SYSTEM},
-                    {"role": "user", "content": _task_intro(task)}]
+                    {"role": "user", "content": _task_intro(task, schema_style)}]
         for j in range(t):
             # The [step j] marker is included so the clean history is
             # structurally identical to a free run's history at the same depth.

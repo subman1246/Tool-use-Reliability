@@ -189,6 +189,7 @@ def main():
     p_rows, f_rows, succ_rows, tri_rows, group, names, backend_stats = \
         [], [], [], [], [], [], {}
     delta_results, L_ci, extra = {}, {}, {}
+    extra_filled: dict[str, list[int]] = {}   # model -> depths with substituted inputs
 
     for gi, m in enumerate(models):
         print(f"\n=== running {m['name']} ===")
@@ -233,6 +234,20 @@ def main():
         loaded = load_records(path)
         stats_by_depth = aggregate_by_depth(loaded, depths)
         p, f_syn, filled = stats_to_arrays(stats_by_depth)
+        # stats_to_arrays substitutes a neighbouring depth's value wherever a
+        # bin is degenerate (p_t NaN or 0, or no fresh errors to estimate f_syn
+        # from). The fit then treats that substitute as a measurement. On weak
+        # models at depth this is likely, not hypothetical, so say so loudly --
+        # run_full_analysis printed this note and run_real_suite silently
+        # dropped it.
+        if any(filled):
+            bad = [depths[i] for i, fl in enumerate(filled) if fl]
+            print(f"  WARNING: {m['name']} needed substituted inputs at "
+                 f"depth(s) {bad} -- p_t and/or f_syn were degenerate there "
+                 f"and were filled from a neighbouring depth. The fit for this "
+                 f"model is partly driven by placeholder values; L_t at those "
+                 f"depths is the trustworthy quantity.")
+            extra_filled[m["name"]] = bad
         succ = np.array([round(s.g_t * s.n_g) if s.n_g else 0 for s in stats_by_depth])
         tri = np.array([s.n_g for s in stats_by_depth])
 
@@ -283,7 +298,8 @@ def main():
                   "successes": successes.tolist(), "trials": trials.tolist(),
                   "backend_stats": backend_stats, "models_config": models,
                   "delta_1": delta_results, "L_ci": L_ci,
-                  "per_depth_extra": extra},
+                  "per_depth_extra": extra,
+                  "substituted_input_depths": extra_filled},
                  fh, indent=2)
 
     print(f"\nsaved -> {OUT_DIR}/{tag}_idata.pkl, {tag}_meta.json")
