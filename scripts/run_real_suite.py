@@ -3,14 +3,22 @@ actual models via LiteLLM instead of simulated policies. This is the script
 to run once you're in an environment with API keys and network access.
 
 Usage:
-  cp .env.example .env   # fill in keys
-  source .env  (or use python-dotenv / your shell's env loading)
-  PYTHONPATH=src python scripts/estimate_cost.py           # do this FIRST
-  PYTHONPATH=src python scripts/run_real_suite.py --pilot   # small pilot run
-  PYTHONPATH=src python scripts/run_real_suite.py           # full sweep
+  cp .env.example .env   # fill in keys; loaded automatically, no `source` needed
+  python scripts/estimate_cost.py            # do this FIRST
+  python scripts/run_real_suite.py --pilot   # small pilot run
+  python scripts/run_real_suite.py           # full sweep
+
+On Windows, invoke via the py launcher (`py scripts/run_real_suite.py`) -- the
+`python` on PATH is often the Microsoft Store stub. There is no `source` on
+Windows either, which is why keys are loaded from .env in-process below rather
+than being expected in the environment.
 
 Reads the model suite from config/default.yaml so the model list is a config
 change, not a code change.
+
+Results are written under a run tag (--tag, default "real") so that ablations
+(e.g. the native calling-mode subset) don't overwrite the main run. Pass the
+same tag to `python -m tur.analysis.plots --tag <tag>` to make its figures.
 """
 
 from __future__ import annotations
@@ -19,9 +27,11 @@ import argparse
 import json
 import os
 import pickle
+from pathlib import Path
 
 import numpy as np
 import yaml
+from dotenv import load_dotenv
 
 from tur.tasks.dag import generate_suite
 from tur.harness.cache import Cache
@@ -53,7 +63,7 @@ def delta_1(records: list[dict]) -> dict:
            "n_given_wrong": len(given_wrong)}
 
 OUT_DIR = "data/results"
-RUN_TAG = "real"
+DEFAULT_TAG = "real"
 
 
 def run_model(model_cfg: dict, depths: list[int], per_depth: int, seeds: int,
@@ -87,7 +97,21 @@ def main():
     ap.add_argument("--models", nargs="+", default=None,
                     help="override the model list from config, by name")
     ap.add_argument("--call-mode", choices=["uniform", "native"], default="uniform")
+    ap.add_argument("--tag", default=DEFAULT_TAG,
+                    help="run tag for output filenames (default: %(default)s). "
+                         "Use a distinct tag for ablations so they don't "
+                         "overwrite the main run, then pass the same tag to "
+                         "tur.analysis.plots --tag.")
     args = ap.parse_args()
+    tag = args.tag
+
+    # Load API keys from the repo-root .env before any backend is constructed.
+    # Anchored to this file's location, not the CWD, so the script works when
+    # invoked from anywhere.
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    load_dotenv(env_path)
+    if not env_path.exists():
+        print(f"WARNING: no .env at {env_path}; relying on ambient environment")
 
     cfg = yaml.safe_load(open(args.config))
     depths = cfg.get("depths", [1, 2, 4, 6, 8])
@@ -135,7 +159,7 @@ def main():
         backend_stats[m["name"]] = stats
         print(f"  done. {stats}")
 
-        path = f"{OUT_DIR}/{RUN_TAG}_{m['name'].replace('/', '_')}.jsonl"
+        path = f"{OUT_DIR}/{tag}_{m['name'].replace('/', '_')}.jsonl"
         with open(path, "w") as fh:
             for r in records:
                 fh.write(json.dumps(r) + "\n")
@@ -185,9 +209,9 @@ def main():
                              draws=1500, tune=1500, chains=4, seed=7,
                              target_accept=0.97)
 
-    with open(f"{OUT_DIR}/{RUN_TAG}_idata.pkl", "wb") as fh:
+    with open(f"{OUT_DIR}/{tag}_idata.pkl", "wb") as fh:
         pickle.dump(idata, fh)
-    with open(f"{OUT_DIR}/{RUN_TAG}_meta.json", "w") as fh:
+    with open(f"{OUT_DIR}/{tag}_meta.json", "w") as fh:
         json.dump({"names": names, "group": group.tolist(), "depths": depths,
                   "p": p.tolist(), "f_syn": f_syn.tolist(),
                   "successes": successes.tolist(), "trials": trials.tolist(),
@@ -196,9 +220,9 @@ def main():
                   "per_depth_extra": extra},
                  fh, indent=2)
 
-    print(f"\nsaved -> {OUT_DIR}/{RUN_TAG}_idata.pkl, {RUN_TAG}_meta.json")
-    print("Run `PYTHONPATH=src python -m tur.analysis.plots` with RUN_TAG='real' "
-         "in plots.py (or pass it as an arg) to generate figures.")
+    print(f"\nsaved -> {OUT_DIR}/{tag}_idata.pkl, {tag}_meta.json")
+    print(f"Next: python -m tur.analysis.plots --tag {tag}   "
+         "(use `py` on Windows) to generate the figures.")
 
 
 if __name__ == "__main__":

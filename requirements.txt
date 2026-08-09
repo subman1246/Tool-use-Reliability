@@ -1,10 +1,18 @@
 numpy>=1.26
 scipy>=1.11
 pandas>=2.0
-pymc>=6.0
-arviz>=0.18
+# pymc/arviz are pinned exactly, not floored. The fitting and plotting code is
+# written against specific APIs in these two: arviz's classic plot_forest
+# signature already broke once across a minor release (see the fallback in
+# analysis/plots.py), and a silent upgrade would take the figures with it.
+# These are the versions the real run was executed under.
+pymc==6.2.0
+arviz==1.2.0
 litellm>=1.40
 pydantic>=2.0
 pyyaml>=6.0
 matplotlib>=3.8
 statsmodels>=0.14
+# loaded by run_real_suite.py so a plain `py scripts/run_real_suite.py` picks up
+# .env without needing shell-exported vars (there is no `source` on Windows).
+python-dotenv>=1.0
