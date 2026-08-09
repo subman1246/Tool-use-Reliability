@@ -116,6 +116,17 @@ def main():
     cfg = yaml.safe_load(open(args.config))
     depths = cfg.get("depths", [1, 2, 4, 6, 8])
     per_depth = cfg.get("per_depth", 200)
+    # per_depth may be a per-depth mapping (see config comments) or a single
+    # count. Normalise YAML keys to int and fail loudly on a depth with no
+    # allocation, rather than silently generating zero tasks for it and
+    # producing an empty depth bin the fit would then have to cope with.
+    if isinstance(per_depth, dict):
+        per_depth = {int(k): int(v) for k, v in per_depth.items()}
+        missing = [d for d in depths if not per_depth.get(d)]
+        if missing:
+            raise SystemExit(f"per_depth has no positive count for depths "
+                             f"{missing}; either add them or drop them from "
+                             f"`depths`.")
     seeds = cfg.get("seeds", 2)
     distractor_level = cfg.get("distractor_level", 1)
     max_retries = cfg.get("max_retries", 1)

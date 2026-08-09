@@ -1,23 +1,57 @@
 # experiment configuration
 depths: [1, 2, 4, 6, 8]
-per_depth: 150
+
+# Per-depth task counts, NOT a uniform count. A depth-8 task issues 8x the
+# calls of a depth-1 task, while the propagation signal lives at depth (L_1 is
+# 0 by construction), so a uniform allocation spends most of a rate-limited
+# budget on the least informative bin. This weighting yields ~2,780 calls per
+# model per seed, which fits Groq's 1,000 req/day/model cap over three days.
+# An int is still accepted here and applies to every depth.
+per_depth:
+  1: 60
+  2: 60
+  4: 65
+  6: 65
+  8: 70
+
 distractor_level: 1
-seeds: 2
+seeds: 1                    # 1, not 2: the bootstrap resamples tasks anyway, so
+                            # a second generator seed buys less than more tasks
 feedback: structured        # structured | opaque
 call_mode: uniform          # uniform | native
 max_retries: 1
 
-# NOTE: model IDs below are a starting point and MUST be verified against each
-# provider's current model list before the real run -- names drift often.
-# All entries here are free-tier. `family` drives the hierarchical model's
-# partial pooling; `scale` (in billions of params) drives the pi-vs-scale figure.
+# Model IDs below were verified against each provider's LIVE model list and by
+# a real completion call on 2026-08-09. Every ID in the previous version of this
+# file was stale -- the entire Qwen2.5 / Llama-3.1-instruct generation has been
+# retired from Groq's free tier -- so re-verify before any future run.
+#
+# `family` drives the hierarchical model's partial pooling; `scale` (billions of
+# params) drives the pi-vs-scale figure. For MoE models `scale` is TOTAL params
+# (the conventional headline figure) and `active_scale` records params active
+# per token, which is what actually governs compute -- H2 can be read against
+# either, and they disagree for gpt-oss.
+#
+# Design axes achievable on free tiers as of this date (see docs/RESULTS_real_run.md):
+#   scale-within-family : llama {8, 70} and gpt-oss {20, 120} -- 2 points each,
+#                         NOT the 3-4 the methodology asks for; no free host
+#                         offers 3+ sizes of one family any more.
+#   family-at-scale     : allam 7B vs llama 8B (~7-9B bin, 2 families only);
+#                         gpt-oss 20B vs qwen 27B as a second mid-scale bin.
+#   proprietary ref     : gemini-2.5-flash.
+#   FC-tuned vs base    : NOT TESTABLE -- no xLAM/Hammer variant on any free host.
 models:
-  - {name: "groq/qwen2.5-7b-instruct",   family: "qwen",   scale: 7}
-  - {name: "groq/qwen2.5-32b-instruct",  family: "qwen",   scale: 32}
-  - {name: "groq/qwen2.5-72b-instruct",  family: "qwen",   scale: 72}
-  - {name: "groq/llama-3.1-8b-instruct", family: "llama",  scale: 8}
-  - {name: "groq/llama-3.3-70b-versatile", family: "llama", scale: 70}
-  - {name: "gemini/gemini-2.5-flash",    family: "gemini", scale: 0}
+  # --- scale within family: Meta Llama (dense) ---
+  - {name: "groq/llama-3.1-8b-instant",    family: "llama",   scale: 8,   provider: "groq"}
+  - {name: "groq/llama-3.3-70b-versatile", family: "llama",   scale: 70,  provider: "groq"}
+  # --- scale within family: OpenAI gpt-oss (sparse MoE) ---
+  - {name: "groq/openai/gpt-oss-20b",      family: "gpt-oss", scale: 20,  active_scale: 3.6, provider: "groq"}
+  - {name: "groq/openai/gpt-oss-120b",     family: "gpt-oss", scale: 120, active_scale: 5.1, provider: "groq"}
+  # --- family axis at matched scale ---
+  - {name: "groq/qwen/qwen3.6-27b",        family: "qwen",    scale: 27,  provider: "groq"}
+  - {name: "groq/allam-2-7b",              family: "allam",   scale: 7,   provider: "groq"}
+  # --- proprietary reference; scale null = undisclosed, excluded from fig4 ---
+  - {name: "gemini/gemini-2.5-flash",      family: "gemini",  scale: null, provider: "gemini"}
 
 paths:
   results: data/results

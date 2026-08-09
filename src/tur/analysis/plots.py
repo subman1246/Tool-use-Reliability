@@ -137,15 +137,25 @@ def fig_pi_vs_scale(idata, meta):
         families = sorted({by_name[n]["family"] for n in names})
         palette = plt.cm.tab10.colors
         for fi, fam in enumerate(families):
-            idx = [i for i, n in enumerate(names) if by_name[n]["family"] == fam]
+            # Models with an unknown/undisclosed parameter count (scale null or
+            # 0, e.g. a proprietary reference model) have no place on a
+            # parameter-scale axis; plotting them at x=0 would assert a size
+            # they don't have. They are excluded here and noted below.
+            idx = [i for i, n in enumerate(names)
+                   if by_name[n]["family"] == fam and by_name[n].get("scale")]
+            if not idx:
+                continue
             idx.sort(key=lambda i: by_name[names[i]]["scale"])
             xs = [by_name[names[i]]["scale"] for i in idx]
             ys = [pi_mean[i] for i in idx]
             es = [pi_sd[i] for i in idx]
             ax.errorbar(xs, ys, yerr=es, marker="o", label=fam,
                        color=palette[fi % len(palette)], capsize=3)
-        ax.set_xlabel("parameter scale")
+        ax.set_xlabel("parameter scale (B, total)")
         ax.set_title("Poisoning severity vs. scale (H2)")
+        dropped = [n for n in names if not by_name[n].get("scale")]
+        if dropped:
+            print(f"  (fig4: excluded {dropped} -- undisclosed parameter scale)")
     else:
         tier_order = {"weak": 0, "mid": 1, "strong": 2}
         parseable = all(len(n.split("-")) >= 2 and n.split("-")[1] in tier_order

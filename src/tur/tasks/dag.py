@@ -123,11 +123,21 @@ def generate_task(task_id: str, depth: int, distractor_level: int = 1,
                 seed_value=seed_value, distractor_level=distractor_level)
 
 
-def generate_suite(depths: list[int], per_depth: int, distractor_level: int = 1,
-                   base_seed: int = 0) -> list[Task]:
+def generate_suite(depths: list[int], per_depth: "int | dict[int, int]",
+                   distractor_level: int = 1, base_seed: int = 0) -> list[Task]:
+    """Generate `per_depth` tasks at each depth in `depths`.
+
+    `per_depth` may be a single count applied to every depth, or a per-depth
+    mapping {depth: count}. The mapping form exists because task cost is linear
+    in depth (a depth-8 task issues 8x the calls of a depth-1 task) while the
+    propagation signal is concentrated at depth -- L_1 is 0 by construction --
+    so a uniform allocation spends most of a rate-limited budget on the least
+    informative bin. Depths absent from the mapping fall back to 0 tasks.
+    """
     tasks: list[Task] = []
     for d in depths:
-        for k in range(per_depth):
+        n = per_depth[d] if isinstance(per_depth, dict) else per_depth
+        for k in range(n):
             seed = base_seed + d * 100003 + k
             tasks.append(generate_task(f"d{d}_{k}", d, distractor_level, seed))
     return tasks
