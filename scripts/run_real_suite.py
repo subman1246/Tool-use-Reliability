@@ -36,7 +36,8 @@ from dotenv import load_dotenv
 from tur.tasks.dag import generate_suite
 from tur.harness.cache import Cache
 from tur.harness.executor import FeedbackMode
-from tur.harness.runner import run_free, run_teacher_forced, LiteLLMBackend
+from tur.harness.runner import (run_free, run_teacher_forced, LiteLLMBackend,
+                                RateLimiter, DailyCapReached)
 from tur.analysis.aggregate import (load_records, aggregate_by_depth,
                                     stats_to_arrays, bootstrap_L_ci)
 from tur.model.hierarchical import build_and_sample
@@ -66,26 +67,48 @@ OUT_DIR = "data/results"
 DEFAULT_TAG = "real"
 
 
-def run_model(model_cfg: dict, depths: list[int], per_depth: int, seeds: int,
+def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
              max_retries: int, distractor_level: int, feedback: FeedbackMode,
-             call_mode: str, cache_dir: str) -> tuple[list[dict], dict]:
+             call_mode: str, cache_dir: str, headroom: float = 0.80
+             ) -> tuple[list[dict], dict, bool]:
+    """Run one model's full sweep.
+
+    Returns (records, backend stats, hit_daily_cap). The cap flag is returned
+    rather than swallowed: a sweep cut short by an exhausted allowance is not a
+    finished sweep, and the caller must not persist it as one.
+    """
     name = model_cfg["name"]
     cache = Cache(f"{cache_dir}/{name.replace('/', '_')}")
-    backend = LiteLLMBackend(name, temperature=0.0, cache=cache)
+    limiter = RateLimiter(tpm=model_cfg.get("tpm"), rpd=model_cfg.get("rpd"),
+                          headroom=headroom)
+    backend = LiteLLMBackend(name, temperature=0.0, cache=cache, limiter=limiter)
+    if limiter.tpm or limiter.rpd:
+        print(f"  pacing: tpm={limiter.tpm} rpd={limiter.rpd} "
+             f"headroom={headroom:.0%} (effective {limiter.budget:,.0f} tok/min)")
+    else:
+        print(f"  WARNING: no rpd/tpm in config for {name}; running unpaced")
 
     records = []
     for seed in range(seeds):
         suite = generate_suite(depths, per_depth, distractor_level,
                                base_seed=seed * 31 + 1000)
         for i, task in enumerate(suite):
-            f = run_free(task, backend, call_mode, feedback, max_retries)
-            t = run_teacher_forced(task, backend, call_mode, feedback, max_retries)
+            try:
+                f = run_free(task, backend, call_mode, feedback, max_retries)
+                t = run_teacher_forced(task, backend, call_mode, feedback,
+                                       max_retries)
+            except DailyCapReached as e:
+                print(f"\n  !! DAILY CAP REACHED for {name} at seed {seed}, "
+                     f"task {i + 1}/{len(suite)}: {e}")
+                return records, backend.stats(), True
             records += [r.__dict__ for r in f] + [r.__dict__ for r in t]
-            if (i + 1) % 50 == 0:
+            if (i + 1) % 25 == 0:
+                paced = backend.stats().get("limiter", {}).get("paced_sleep_s", 0)
                 print(f"  {name}: seed {seed}, {i + 1}/{len(suite)} tasks "
                      f"(calls={backend.n_calls} cache_hits={backend.n_cache_hits} "
-                     f"failures={backend.n_failures})")
-    return records, backend.stats()
+                     f"failures={backend.n_failures} 429s={backend.n_rate_limited} "
+                     f"paced_sleep={paced}s)")
+    return records, backend.stats(), False
 
 
 def main():
@@ -97,6 +120,11 @@ def main():
     ap.add_argument("--models", nargs="+", default=None,
                     help="override the model list from config, by name")
     ap.add_argument("--call-mode", choices=["uniform", "native"], default="uniform")
+    ap.add_argument("--headroom", type=float, default=0.80,
+                    help="fraction of each model's TPM ceiling to pace at "
+                         "(default: %(default)s). Below 1.0 on purpose: the "
+                         "token estimate is approximate and overshooting just "
+                         "converts into provider 429s and wasted retries.")
     ap.add_argument("--tag", default=DEFAULT_TAG,
                     help="run tag for output filenames (default: %(default)s). "
                          "Use a distinct tag for ablations so they don't "
@@ -164,10 +192,37 @@ def main():
 
     for gi, m in enumerate(models):
         print(f"\n=== running {m['name']} ===")
-        records, stats = run_model(m, depths, per_depth, seeds, max_retries,
-                                   distractor_level, feedback, args.call_mode,
-                                   cache_dir)
+        records, stats, capped = run_model(
+            m, depths, per_depth, seeds, max_retries, distractor_level,
+            feedback, args.call_mode, cache_dir, args.headroom)
         backend_stats[m["name"]] = stats
+
+        if capped:
+            # Persist what we have under a .partial name that the analysis
+            # loader is never pointed at, then stop the whole run. Writing this
+            # to the normal path would produce a truncated sweep that looks
+            # complete to every downstream step.
+            part = f"{OUT_DIR}/{tag}_{m['name'].replace('/', '_')}.partial.jsonl"
+            with open(part, "w") as fh:
+                for r in records:
+                    fh.write(json.dumps(r) + "\n")
+            print("\n" + "=" * 70)
+            print("RUN HALTED: daily request allowance exhausted")
+            print("=" * 70)
+            print(f"  model        : {m['name']}")
+            print(f"  records kept : {len(records)} -> {part}")
+            print(f"  backend      : {stats}")
+            print(f"  models done  : {names}")
+            print(f"  not started  : {[x['name'] for x in models[gi + 1:]]}")
+            print()
+            print("  Nothing was written to the normal output path for this")
+            print("  model, so the partial sweep cannot be analysed as if it")
+            print("  were complete. Every successful call is in the response")
+            print("  cache, so re-running the same command once the allowance")
+            print("  resets replays finished work for free and continues.")
+            print("=" * 70)
+            raise SystemExit(2)
+
         print(f"  done. {stats}")
 
         path = f"{OUT_DIR}/{tag}_{m['name'].replace('/', '_')}.jsonl"

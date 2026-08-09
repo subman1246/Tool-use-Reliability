@@ -40,16 +40,23 @@ max_retries: 1
 #                         gpt-oss 20B vs qwen 27B as a second mid-scale bin.
 #   proprietary ref     : gemini-2.5-flash.
 #   FC-tuned vs base    : NOT TESTABLE -- no xLAM/Hammer variant on any free host.
+#
+# `rpd` / `tpm` are the enforced rate limits, read from each provider's
+# x-ratelimit-limit-* response headers on 2026-08-09 -- NOT from documentation,
+# which quotes an org-wide 14,400 req/day for Groq when the enforced limit is
+# per model and is 1,000/day for most of them. The runner paces against `tpm`
+# and stops cleanly on `rpd`, and estimate_cost.py reads the same fields, so
+# these are the single source of truth for both.
 models:
   # --- scale within family: Meta Llama (dense) ---
-  - {name: "groq/llama-3.1-8b-instant",    family: "llama",   scale: 8,   provider: "groq"}
-  - {name: "groq/llama-3.3-70b-versatile", family: "llama",   scale: 70,  provider: "groq"}
+  - {name: "groq/llama-3.1-8b-instant",    family: "llama",   scale: 8,   provider: "groq", rpd: 14400, tpm: 6000}
+  - {name: "groq/llama-3.3-70b-versatile", family: "llama",   scale: 70,  provider: "groq", rpd: 1000,  tpm: 12000}
   # --- scale within family: OpenAI gpt-oss (sparse MoE) ---
-  - {name: "groq/openai/gpt-oss-20b",      family: "gpt-oss", scale: 20,  active_scale: 3.6, provider: "groq"}
-  - {name: "groq/openai/gpt-oss-120b",     family: "gpt-oss", scale: 120, active_scale: 5.1, provider: "groq"}
+  - {name: "groq/openai/gpt-oss-20b",      family: "gpt-oss", scale: 20,  active_scale: 3.6, provider: "groq", rpd: 1000, tpm: 8000}
+  - {name: "groq/openai/gpt-oss-120b",     family: "gpt-oss", scale: 120, active_scale: 5.1, provider: "groq", rpd: 1000, tpm: 8000}
   # --- family axis at matched scale ---
-  - {name: "groq/qwen/qwen3.6-27b",        family: "qwen",    scale: 27,  provider: "groq"}
-  - {name: "groq/allam-2-7b",              family: "allam",   scale: 7,   provider: "groq"}
+  - {name: "groq/qwen/qwen3.6-27b",        family: "qwen",    scale: 27,  provider: "groq", rpd: 1000,  tpm: 8000}
+  - {name: "groq/allam-2-7b",              family: "allam",   scale: 7,   provider: "groq", rpd: 7000,  tpm: 6000}
   # --- proprietary reference: DISABLED, no working key ---
   # The Gemini key in .env returns 403 PERMISSION_DENIED ("Your project has
   # been denied access") on generateContent, confirmed against the raw REST

@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Protocol
 
@@ -61,6 +63,144 @@ class MockBackend:
         return {"text": json.dumps({"tool": tool, "args": args})}
 
 
+class DailyCapReached(RuntimeError):
+    """The model's daily request allowance is gone.
+
+    Raised rather than absorbed. Continuing past this point would fill the log
+    with backend_error records that look like model failures, producing a
+    partial sweep that is indistinguishable from a complete one once it reaches
+    the analysis. The caller is expected to stop this model, say so loudly, and
+    exit non-zero.
+    """
+
+
+class RateLimiter:
+    """Paces requests against a tokens-per-minute ceiling and a daily request cap.
+
+    On free tiers TPM binds long before requests-per-day does: a sweep can sit
+    well inside its daily allowance and still be throttled to a crawl. We pace
+    against a fraction of the TPM ceiling (`headroom`) rather than riding it,
+    because the token estimate is approximate and overshooting just converts
+    into provider-side 429s and wasted retries.
+
+    Limits are seeded from config but re-synced from the provider's own
+    x-ratelimit-remaining-* response headers whenever they are available, which
+    makes the limiter self-correcting: it tracks the provider's accounting
+    rather than a static guess that drifts (and Groq's daily allowance is a
+    continuously-refilling bucket, not a calendar-day counter).
+    """
+
+    def __init__(self, tpm: int | None = None, rpd: int | None = None,
+                 headroom: float = 0.80, reserve_requests: int = 5):
+        self.tpm = tpm
+        self.rpd = rpd
+        self.headroom = headroom
+        self.reserve_requests = reserve_requests
+        self._window: deque[tuple[float, int]] = deque()  # (ts, tokens)
+        self.n_requests = 0
+        self.remaining_requests: int | None = None
+        self.remaining_tokens: int | None = None
+        self.sleep_seconds = 0.0
+
+    @property
+    def budget(self) -> float:
+        return (self.tpm or 0) * self.headroom
+
+    def _prune(self, now: float) -> int:
+        while self._window and now - self._window[0][0] >= 60.0:
+            self._window.popleft()
+        return sum(t for _, t in self._window)
+
+    def acquire(self, est_tokens: int) -> None:
+        """Block until `est_tokens` fits in the trailing 60s budget."""
+        if self.rpd is not None and self.n_requests >= self.rpd:
+            raise DailyCapReached(
+                f"local request count {self.n_requests} reached the configured "
+                f"daily cap {self.rpd}")
+        if self.remaining_requests is not None and \
+                self.remaining_requests <= self.reserve_requests:
+            raise DailyCapReached(
+                f"provider reports only {self.remaining_requests} requests "
+                f"remaining (reserve={self.reserve_requests})")
+        if self.tpm:
+            while True:
+                now = time.time()
+                used = self._prune(now)
+                if used + est_tokens <= self.budget or not self._window:
+                    break
+                wait = 60.0 - (now - self._window[0][0]) + 0.05
+                self.sleep_seconds += max(wait, 0.0)
+                time.sleep(max(wait, 0.0))
+            self._window.append((time.time(), est_tokens))
+        # Counted whether or not a TPM ceiling is configured -- this is the
+        # figure the daily cap is checked against.
+        self.n_requests += 1
+
+    def sync_from_headers(self, headers: dict) -> None:
+        """Adopt the provider's own remaining-quota accounting when exposed."""
+        if not headers:
+            return
+        h = {str(k).lower(): v for k, v in headers.items()}
+        rr = h.get("x-ratelimit-remaining-requests")
+        rt = h.get("x-ratelimit-remaining-tokens")
+        try:
+            if rr is not None:
+                self.remaining_requests = int(float(rr))
+            if rt is not None:
+                self.remaining_tokens = int(float(rt))
+        except (TypeError, ValueError):
+            pass
+
+    def stats(self) -> dict:
+        return {"n_requests": self.n_requests, "tpm": self.tpm, "rpd": self.rpd,
+                "headroom": self.headroom,
+                "remaining_requests": self.remaining_requests,
+                "remaining_tokens": self.remaining_tokens,
+                "paced_sleep_s": round(self.sleep_seconds, 1)}
+
+
+def _count_tokens(messages: list[dict], fallback_divisor: int = 4) -> int:
+    """Approximate prompt tokens for pacing purposes.
+
+    Exactness is not required -- this feeds a throttle with headroom, not a
+    billing figure -- so a tokenizer-free fallback is acceptable.
+    """
+    text = "".join(str(m.get("content", "")) for m in messages)
+    try:
+        import tiktoken
+        global _ENC
+        if _ENC is None:
+            _ENC = tiktoken.get_encoding("o200k_base")
+        return len(_ENC.encode(text)) + 40
+    except Exception:
+        return len(text) // fallback_divisor + 40
+
+
+_ENC = None
+
+
+# Phrases that indicate an allowance which will NOT clear within any reasonable
+# backoff. Deliberately excludes bare "429"/"rate limit", which are usually the
+# per-minute ceiling and should be waited out instead.
+_DAILY_CAP_MARKERS = ("per day", "requests per day", "rpd", "daily limit",
+                      "daily quota", "quota exceeded", "exceeded your current quota",
+                      "resource_exhausted", "resource exhausted",
+                      "insufficient_quota")
+
+
+def _is_daily_cap_error(err: Exception) -> bool:
+    """Distinguish an exhausted daily allowance from a transient per-minute 429.
+
+    A per-minute 429 should be waited out; a daily one will not clear within any
+    reasonable backoff, so retrying it just burns whatever allowance is left on
+    calls that cannot succeed. Matching is on the marker phrases alone -- an
+    earlier version also required "429"/"rate"/"quota" to appear, which silently
+    failed to catch Google's bare RESOURCE_EXHAUSTED.
+    """
+    msg = str(err).lower()
+    return any(m in msg for m in _DAILY_CAP_MARKERS)
+
+
 class LiteLLMBackend:
     """Provider-agnostic backend via LiteLLM. Imported lazily.
 
@@ -74,17 +214,20 @@ class LiteLLMBackend:
 
     def __init__(self, model: str, temperature: float = 0.0,
                 max_retries: int = 5, base_delay: float = 1.0,
-                timeout: float = 60.0, cache: "Cache | None" = None):
+                timeout: float = 60.0, cache: "Cache | None" = None,
+                limiter: "RateLimiter | None" = None):
         self.model = model
         self.temperature = temperature
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.timeout = timeout
         self.cache = cache
+        self.limiter = limiter
         self.n_calls = 0
         self.n_cache_hits = 0
         self.n_retries = 0
         self.n_failures = 0
+        self.n_rate_limited = 0
 
     def complete(self, messages, tools, mode):
         clean = [{k: v for k, v in m.items() if not k.startswith("_")}
@@ -108,11 +251,20 @@ class LiteLLMBackend:
                                              "parameters": _json_schema(t)}}
                                for t in tools]
 
+        est_tokens = _count_tokens(clean) if self.limiter else 0
+
         last_err = None
         for attempt in range(self.max_retries + 1):
+            # Pace before every attempt, including retries -- a retry is a real
+            # request and counts against the same allowance. DailyCapReached
+            # propagates deliberately; it is not a transient condition.
+            if self.limiter is not None:
+                self.limiter.acquire(est_tokens)
             self.n_calls += 1
             try:
                 resp = litellm.completion(**kwargs)
+                if self.limiter is not None:
+                    self.limiter.sync_from_headers(_response_headers(resp))
                 msg = resp["choices"][0]["message"]
                 if mode == "native" and msg.get("tool_calls"):
                     tc = msg["tool_calls"][0]["function"]
@@ -123,11 +275,21 @@ class LiteLLMBackend:
                 if self.cache is not None:
                     self.cache.set(cache_key, result)
                 return result
+            except DailyCapReached:
+                raise
             except Exception as e:  # noqa: broad except is intentional here --
                 # litellm normalises errors across providers into its own
                 # exception hierarchy, but network/timeout errors from the
                 # underlying transport can still leak through untyped.
                 last_err = e
+                if _is_daily_cap_error(e):
+                    # No backoff will clear this; retrying spends the little
+                    # allowance left on calls that cannot succeed.
+                    raise DailyCapReached(
+                        f"provider signalled a daily/quota limit for "
+                        f"{self.model}: {e}") from e
+                if "429" in str(e):
+                    self.n_rate_limited += 1
                 if attempt < self.max_retries:
                     self.n_retries += 1
                     delay = self.base_delay * (2 ** attempt) + random.uniform(0, 0.5)
@@ -141,9 +303,31 @@ class LiteLLMBackend:
         return {"text": "", "_backend_error": str(last_err)}
 
     def stats(self) -> dict:
-        return {"model": self.model, "n_calls": self.n_calls,
-               "n_cache_hits": self.n_cache_hits, "n_retries": self.n_retries,
-               "n_failures": self.n_failures}
+        s = {"model": self.model, "n_calls": self.n_calls,
+             "n_cache_hits": self.n_cache_hits, "n_retries": self.n_retries,
+             "n_failures": self.n_failures,
+             "n_rate_limited": self.n_rate_limited}
+        if self.limiter is not None:
+            s["limiter"] = self.limiter.stats()
+        return s
+
+
+def _response_headers(resp: Any) -> dict:
+    """Best-effort extraction of provider response headers from a LiteLLM
+    response. LiteLLM stashes these inconsistently across versions and
+    providers, so every access is guarded and a miss is simply no sync."""
+    for getter in (
+        lambda: resp._hidden_params.get("additional_headers"),
+        lambda: resp._hidden_params.get("response_headers"),
+        lambda: resp._response_headers,
+    ):
+        try:
+            h = getter()
+            if h:
+                return dict(h)
+        except Exception:
+            continue
+    return {}
 
 
 def _json_schema(tool_view: dict) -> dict:
@@ -184,9 +368,92 @@ def parse_response(resp: dict, mode: str) -> ParsedCall:
         return ParsedCall(None, None, False, text)
 
 
+_REASONING_CLOSE = re.compile(r"</think(?:ing)?>", re.I)
+_REASONING_OPEN = re.compile(r"<think(?:ing)?>", re.I)
+
+
+def _strip_reasoning(text: str) -> str:
+    """Drop a reasoning preamble so it can't be mistaken for the answer.
+
+    Reasoning models (qwen3.6 here) emit a <think> block before the call. That
+    block routinely contains braces -- draft JSON, dict literals, prose about
+    the schema -- so any brace-based extraction that sees it will splice
+    reasoning into the parsed call. Everything after the LAST close tag is the
+    answer. An unclosed block means the response was truncated mid-reasoning
+    and there is no answer to find, which is a genuine failure, not a parsing
+    artifact, so we leave nothing behind for the scanner to latch onto.
+    """
+    if _REASONING_CLOSE.search(text):
+        return _REASONING_CLOSE.split(text)[-1]
+    if _REASONING_OPEN.search(text):
+        return _REASONING_OPEN.split(text)[0]
+    return text
+
+
+def _top_level_objects(text: str) -> list[str]:
+    """Every balanced, top-level {...} span, in order of appearance.
+
+    Brace counting is string-aware: braces inside JSON string values, and
+    escaped quotes within them, do not affect depth. Nested objects are not
+    returned separately -- only spans that open and close at depth zero -- so
+    the args sub-object of a call is never mistaken for the call itself.
+    """
+    spans: list[str] = []
+    depth = 0
+    start = -1
+    in_str = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    spans.append(text[start:i + 1])
+                    start = -1
+    return spans
+
+
 def _extract_json(text: str) -> str:
-    start, end = text.find("{"), text.rfind("}")
-    return text[start:end + 1] if start != -1 and end != -1 else text
+    """Pull the model's call out of a free-text response.
+
+    Returns the LAST balanced top-level object that actually parses, rather
+    than the old first-brace-to-last-brace slice. That slice was wrong in two
+    common real-model cases: a reasoning preamble containing braces (it would
+    span from a brace in the reasoning to the last brace of the answer, parsing
+    as neither), and any response with more than one JSON object in it. Taking
+    the last parseable object also handles markdown code fences for free, since
+    the fence markers sit outside the braces.
+
+    Preferring the last object reflects answer-after-reasoning ordering. It can
+    in principle pick up a trailing commentary object if that object is itself
+    valid JSON; that is rarer than the failure modes it fixes. Nothing here
+    inspects the object's contents, so an unparseable response is still a parse
+    failure and is still recorded as one.
+    """
+    cleaned = _strip_reasoning(text)
+    for cand in reversed(_top_level_objects(cleaned)):
+        try:
+            json.loads(cand)
+            return cand
+        except json.JSONDecodeError:
+            continue
+    # Nothing balanced and parseable: hand back the cleaned text so the caller's
+    # json.loads fails and the step is logged as a syntactic failure.
+    return cleaned
 
 
 def _coerce_ints(args: dict | None) -> dict:
