@@ -140,7 +140,7 @@ def report_fit(meta: dict, idata) -> None:
     names = meta["names"]
     print(f"  priors centred on measured transitions: {meta.get('priors_used')}")
     print()
-    print(f"  {'model':<26}{'pi':>16}{'r_syn':>16}{'r_sem':>16}"
+    print(f"  {'model':<26}{'pi':>19}{'r_syn':>19}{'r_sem':>19}"
           f"{'c(pi,rsyn)':>12}{'c(pi,rsem)':>12}")
     for i, name in enumerate(names):
         row = []
@@ -149,7 +149,7 @@ def report_fit(meta: dict, idata) -> None:
             lo, hi = np.percentile(x, [5.5, 94.5])
             row.append(f"{x.mean():.2f} [{lo:.2f},{hi:.2f}]")
         ident = identifiability(idata, i)
-        print(f"  {short(name):<26}{row[0]:>16}{row[1]:>16}{row[2]:>16}"
+        print(f"  {short(name):<26}{row[0]:>19}{row[1]:>19}{row[2]:>19}"
               f"{ident['corr_pi_rsyn']:>12.3f}{ident['corr_pi_rsem']:>12.3f}")
     print()
     worst = max(max(abs(identifiability(idata, i)["corr_pi_rsyn"]),

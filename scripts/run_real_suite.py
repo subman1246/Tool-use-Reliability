@@ -28,6 +28,7 @@ import json
 import os
 import pickle
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -178,7 +179,7 @@ def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
              max_retries: int, distractor_level: int, feedback: FeedbackMode,
              call_mode: str, cache_dir: str, headroom: float = 0.80,
              variant: str = "routing", tpd: int | None = None,
-             lines: list[str] | None = None
+             lines: list[str] | None = None, deadline: float | None = None
              ) -> tuple[list[dict], dict, bool]:
     """Run one model's full sweep on one task variant.
 
@@ -204,6 +205,18 @@ def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
     for seed in range(seeds):
         suite = _suite_for(variant, depths, per_depth, distractor_level, seed)
         for i, task in enumerate(suite):
+            if deadline is not None and time.monotonic() > deadline:
+                # Stop cleanly on a wall-clock budget, exactly as on a token cap.
+                # Both leave a nested PREFIX of the allocation, which is a valid
+                # smaller allocation, so the data is usable provided the achieved
+                # n is what gets recorded. Without this a run that is pacing
+                # against TPM for hours cannot be interrupted without losing the
+                # records it has already built in memory -- the API responses are
+                # cached, but the scored rows are not.
+                log(lines, f"  {name} [{variant}]: wall-clock budget reached at "
+                           f"task {i + 1}/{len(suite)}; stopping cleanly with a "
+                           f"nested prefix")
+                return records, backend.stats(), True
             try:
                 f = run_free(task, backend, call_mode, feedback, max_retries)
                 t = run_teacher_forced(task, backend, call_mode, feedback,
@@ -251,6 +264,11 @@ def main():
                          "the sum. 1 forces the old sequential behaviour.")
     ap.add_argument("--no-control", action="store_true",
                     help="skip the control arm (see config: control_arm)")
+    ap.add_argument("--max-minutes", type=float, default=0,
+                    help="stop cleanly after this many minutes and write what "
+                         "was collected. A time-bounded sweep leaves a nested "
+                         "prefix, same as a token-capped one, so the data stays "
+                         "usable at the achieved n. 0 (default) means no limit.")
     args = ap.parse_args()
     tag = args.tag
 
@@ -400,7 +418,8 @@ def main():
         recs, stats, capped = run_model(
             m, depths, my_primary, seeds, max_retries, distractor_level,
             feedback, args.call_mode, cache_dir, args.headroom,
-            variant=variant, tpd=my_tpd, lines=lines)
+            variant=variant, tpd=my_tpd, lines=lines,
+            deadline=deadline)
         out = {"model": m, "records": recs, "stats": stats, "capped": capped,
                "lines": lines, "control": None, "plan": plan,
                "primary_alloc": my_primary, "control_alloc": my_control}
@@ -412,10 +431,17 @@ def main():
             c_recs, c_stats, c_capped = run_model(
                 m, ctrl_depths, my_control, seeds, max_retries, distractor_level,
                 feedback, args.call_mode, cache_dir, args.headroom,
-                variant=ctrl_variant, tpd=my_tpd, lines=lines)
+                variant=ctrl_variant, tpd=my_tpd, lines=lines,
+                deadline=deadline)
             out["control"] = {"records": c_recs, "stats": c_stats,
                               "capped": c_capped}
         return out
+
+    deadline = (time.monotonic() + args.max_minutes * 60
+                if args.max_minutes else None)
+    if deadline:
+        print(f"  wall-clock budget: {args.max_minutes:g} min "
+              f"(models stop cleanly and keep their nested prefix)")
 
     n_jobs = args.jobs if args.jobs > 0 else len(models)
     n_jobs = max(1, min(n_jobs, len(models)))
