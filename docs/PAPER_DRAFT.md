@@ -225,6 +225,11 @@ context is corrupted.
 
 ### 2.6 Methods for improving reliability
 
+The mitigations below share a target, and it is not the one this paper is about: they
+address how *often* an incorrect call is produced, whether by improving single-turn
+accuracy or by constraining output format. None of them speaks to what happens to a chain
+once an incorrect call has entered it. That is the gap the propagation framing addresses.
+
 Proposed fixes sit at different points in the pipeline. Reliability alignment
 (Relign) trains models to abstain or clarify when they are unsure.
 Data-centric approaches such as ToolACE (Liu et al., 2025) and Hammer (Lin et
@@ -421,34 +426,103 @@ variant is exercised by the stress-test suite but not by this validation run;
 an earlier draft of this section incorrectly claimed both. Section 4.4 explains
 why the distinction matters.)
 
-### 4.2 Hardening found during validation
+### 4.2 Harness hardening and artifact elimination
 
-Seven correctness issues were identified and fixed across two audit passes,
-each locked in by a regression test:
+Validation surfaced nine measurement artifacts. Seven are eliminable by construction,
+and we state those as the structural constraints the harness now enforces rather than as
+a list of repairs, because the constraint is the reusable object. Two are not, and we
+keep those as narrative for a reason given at the end: the code and the configuration
+were both correct, and the measurement was invalid anyway.
 
-1. A retry-budget asymmetry between teacher-forced and free runs, which made
-  $p_t$ and $g_t$ not directly comparable.
-2. No mechanism for selection errors to propagate (the original linear tasks
-  pre-announce tool order); addressed by the routing task variant.
-3. A stuck-poisoned state in the simulated policy with no recovery path once
-  a syntax failure's retry budget was exhausted.
-4. Selection errors mis-attributed under poisoning: on routing tasks, an
-  agent applying its own routing rule correctly to an already-poisoned value
-  was scored as a selection failure against the fixed gold trajectory. Fixed
-  by conditional selection scoring (Section 3.4).
-5. Invisible stalled chains: a step that never executed left the carried
-  value stale, and downstream steps were indistinguishable from ordinary
-  semantic corruption. Fixed with an explicit stalled-state flag.
-6. The syntactic error share was estimated from *all* errors, including ones
-  that were wrong purely because of upstream poisoning, inflating the
-  semantic share. Fixed by restricting the estimator to fresh errors on clean
-  contexts; validated against the known configuration (recovered $f_{\text{syn}}$
-  closely tracked the configured syntax share once fixed, whereas it did not
-  before).
-7. $L_t$ initially had no uncertainty estimate; added task-level bootstrap
-  confidence intervals.
+**Constraints enforced by construction.** Each is locked by a regression test.
+
+1. **Retry budgets are normalised across run modes.** Teacher-forced and free runs
+  receive identical retry allowances, so $p_t$ and $g_t$ differ only in whether the
+  upstream history is correct and not in how many attempts each step was given.
+2. **Selection errors must be able to propagate.** The linear task family announces the
+  tool order, so a wrong value can corrupt arguments but never tool choice; the routing
+  variant makes the correct tool a function of the carried value, which is the condition
+  under which a selection error has downstream consequences at all.
+3. **Every poisoned state has a reachable exit.** A syntax failure whose retry budget is
+  exhausted must not leave the chain permanently absorbed by a mechanism unrelated to the
+  severity parameter.
+4. **Selection is scored conditionally as well as against gold.** An agent applying the
+  routing rule correctly to an already-poisoned value is not committing a selection
+  error, and scoring it as one attributes argument propagation to the selection channel
+  (§3.4).
+5. **Stalled chains are labelled explicitly.** A step that never executed leaves the
+  carried value stale, which is a distinct corruption mode from a wrong-value semantic
+  error and must not be readable as one downstream.
+6. **Composition estimators are restricted to fresh errors on clean contexts.** Errors
+  that are wrong purely because of upstream poisoning carry no information about which
+  error type a model produces, and including them inflates the semantic share. Validated
+  against known configuration: the recovered syntactic share tracks the configured one
+  after the restriction and does not before it.
+7. **Every reported rate carries an interval.** $L_t$ is a ratio of two estimated rates,
+  so its uncertainty is not either one's; task-level bootstrap intervals are computed
+  because task-level resampling preserves within-chain correlation.
+
+**Two artifacts were not preventable by construction, and that is their value.**
+
+The first was a definitional error hidden by a task property. "Clean context" is a
+property of the value carried *in*, but the harness compared the carried value against
+the expected *argument*. On a copy-argument task those are equal by construction, so the
+comparison was correct and every test passed. It becomes wrong only on a task where the
+required argument is a function of the carried value rather than a copy -- and it was
+invisible until we built one. Had the transformed-argument variant shipped without
+re-deriving the definition, every clean step would have been marked poisoned and $L_t$
+would have been meaningless, with nothing failing.
+
+The second was the simulated policy's recovery mechanism, which did exactly what it was
+configured to do: it recovered at the configured rate, and the log-based estimator
+correctly recovered that rate. But it recovered by reading the gold output directly, and
+no real model has that access. The recovery parameter was therefore never estimable from
+observable data in any version of this study, and the measured-transition priors of §4.3
+were built from transitions only a simulator can produce.
+
+Correct code, correct configuration, invalid measurement. So the section makes two points
+rather than one: most measurement artifacts are eliminable by construction and should be
+stated as constraints, and some are visible only once a task exists that can distinguish
+the definitions -- which is an argument for building such tasks deliberately rather than
+for greater care.
+
 
 ### 4.3 Findings
+
+**A methodological contribution, stated first because it supersedes what this section
+originally reported.** Earlier drafts of this work described the severity and recovery
+parameters as *weakly identified*, evidenced by correlated posteriors, and treated that as
+a limitation. That description was too generous to the fit. The correct statement, derived
+in §5.4 from the real run, is stronger and less comfortable:
+
+> Under exact-match scoring against a fixed gold trajectory, the severity parameter is
+> forced to its boundary and the recovery parameters are unobservable. The recurrence
+> collapses to an identity in the measured per-step rates, with no free parameters. Yet a
+> naive fit of the full model returns posterior means of 0.93 and 0.73 -- **confident
+> estimates of quantities the scoring regime had already determined**.
+
+The practical warning is that nothing in the standard diagnostic toolkit catches this.
+Our sampler reported max $\hat{R} \le 1.002$, minimum ESS above 4,000, and zero
+divergences. Those diagnostics are working correctly: they certify that the posterior was
+*explored* faithfully, and they are silent on whether the data *constrained* it. A
+well-behaved chain exploring a likelihood that is flat in a parameter produces exactly the
+picture we saw -- tight intervals around a value the prior and the scoring rule chose
+between them. **Clean convergence diagnostics are not evidence of identification**, and on
+gold-trajectory agent benchmarks the two come apart systematically rather than
+occasionally.
+
+The constructive half is the dual-metric protocol, which we propose as a blueprint rather
+than a workaround. Anchor primary claims on the fit-free $L_t$, which is a ratio of two
+directly measured rates and therefore cannot be pinned by the scoring rule. Treat
+parametric posteriors as diagnostic, reported alongside their identifiability evidence,
+and never as a headline. Add conditional-on-state scoring (§5.4a) wherever a claim about
+severity, recovery or self-correction is intended, since that is the only way those
+quantities acquire an interior range. The first two of these cost nothing; the third
+re-scores cached completions and needs no new inference.
+
+What follows are the findings from the simulated suite itself.
+
+
 
 **$L_t$ measures net propagation loss, and that is not the same thing as a
 severity ranking.** Both facts belong here, next to the numbers, because
@@ -718,6 +792,48 @@ property of the metric rather than as a failure to distinguish the models.
 Against the ceiling-level models the separation is total: $L_6 \approx 0.70$
 against $L_t = 0.000$. But that contrast conflates severity with task difficulty
 and is not offered as a model comparison.
+
+### 5.2a Depth-truncated measurement under-counts propagation, always
+
+A general point about measuring $L_t$ at a fixed maximum depth, which the depth-6 result
+made concrete. **An error on the final step of a chain cannot propagate**: there is no
+downstream call for it to corrupt. It lowers $g_t$ by exactly its own contribution and
+adds nothing to the poisoned mass. So the deepest bin any study measures systematically
+under-states propagation loss, and the bias is largest where chains are shortest.
+
+Measured terminal-error share, with the corresponding $L_t$:
+
+| model | depth | errors | terminal | share terminal | $L_t$ |
+|---|---|---|---|---|---|
+| llama-3.1-8b-instant | 1 | 18 | 18 | **1.000** | 0.000 |
+| | 2 | 49 | 35 | 0.714 | 0.145 |
+| | 4 | 165 | 55 | 0.333 | 0.391 |
+| | 6 | 320 | 63 | 0.197 | 0.686 |
+| allam-2-7b | 2 | 78 | 50 | 0.641 | 0.087 |
+| | 6 | 152 | 29 | 0.191 | 0.728 |
+| llama-3.3-70b-versatile | 4 | 7 | 6 | **0.857** | **0.000** |
+| | 6 | 11 | 3 | 0.273 | **+0.140** |
+
+At depth 1 every error is terminal, which is *why* $L_1 = 0$ identically -- it is the
+limiting case of this bias rather than a separate fact. The share then falls roughly as
+$1/d$ and $L_t$ rises against it.
+
+**The extreme case is instructive.** `llama-3.3-70b-versatile` had 6 of its 7 depth-4
+errors on the final step -- 0.857, against the 0.25 that uniformly distributed errors
+would give -- because its errors concentrate late, where the context is longest. With
+almost every error terminal there was nothing left to propagate, and $L_4$ came out at
+exactly 0.000. That looked like a model immune to propagation, and it was not: at depth 6,
+where the terminal share falls to 0.273, the same model shows $L_6 = +0.140$. An automated
+check flagged the $p_t = g_t$ identity, we classified it as benign on precisely this
+ground rather than as suite degeneracy, and the next bin confirmed it.
+
+**Consequence for anyone measuring propagation at a fixed depth.** The reported loss is a
+lower bound, tightening as depth grows but never reaching the asymptote, and the shortfall
+depends on *where in the chain a model's errors fall* -- which differs by model. A model
+whose errors cluster late will look more robust than one whose errors cluster early, at
+equal accuracy. Two mitigations are cheap: report the terminal-error share alongside
+$L_t$, so the size of the bias is visible; and read the depth trend rather than any single
+depth, since the trend is what the bias attenuates rather than reverses.
 
 ### 5.3 Model-free propagation check
 
