@@ -755,11 +755,14 @@ produced any poisoned step has **exactly zero** poisoned-context successes:
 | gpt-oss-120b | 8 | 0 | 0.312 |
 | qwen3.6-27b | 0 | -- | $\pi$ **undefined** |
 
-The honest form is therefore: $\pi = 1.000$ in **all four models that can be measured at
-all**, with tight bounds on the two supplying most of the evidence and weak bounds on
-the two ceiling-level models. `qwen3.6-27b` never left a clean context, so its $\pi$ is
-undefined rather than 1. What carries the claim beyond these four is not the sample
-size but the mechanism below, which implies the result for any model under this scoring
+The support is uneven, and we describe it as such rather than as "four of five", which
+would imply more uniformity than exists. **Two models carry the empirical claim** (397
+and 269 poisoned steps; 95% upper bounds 0.0075 and 0.0111). **Two are consistent but
+uninformative** -- at 8 and 9 poisoned steps, bounds of 0.31 and 0.28 exclude almost
+nothing and contribute almost no evidence. **One is undefined:** `qwen3.6-27b` never left
+a clean context, so it has no severity at all rather than a severity of zero, and it is
+not pooled into any suite-level figure. What extends the claim past the two informative
+models is the mechanism below, which implies the result for any model under this scoring
 rule.
 
 **Recovery is structurally unobservable.** $P(\text{next correct} \mid \text{this
@@ -898,6 +901,26 @@ the value it is conditioning on**. Its discrimination between the two cases is 0
 it is not following the routing rule at all, and its apparent competence when the ref
 happens to be even is an artifact of the bias coinciding with the answer.
 `llama-3.1-8b-instant` does discriminate (+0.267), weakly but genuinely.
+
+**The confound, and why discrimination resolves it.** With a fixed presentation order
+these two accounts predict overlapping data: the rule text always lists the even branch
+first, so the correct tool for an even ref *is* the first-listed tool. "Always picks the
+first-listed option" and "applies the rule but only succeeds on even refs" produce the
+same accuracy pattern, and accuracy cannot separate them.
+
+Discrimination can, because it conditions on the ref rather than on the outcome. A pure
+position bias picks the first-listed tool at the same rate whatever the ref, so its
+discrimination is 0 by construction *whatever its accuracy*, while a model applying the
+rule must pick the first-listed tool more often when the ref is even. The measured 0.041
+against 0.267 is therefore diagnostic of the mechanism rather than of the accuracy, which
+is what makes it evidence.
+
+We also run the direct control, because costing it showed it is cheap. Randomising which
+branch is listed first at each step decouples position from parity outright, letting
+accuracy be compared across the four cells (ref parity x presentation order). It costs
+0.63 days of suite-wide token allowance against 2.9 days for the primary arm's depth-8
+bin alone, and the control is asserted inert: gold trajectories are bit-identical to the
+unshuffled tasks, a perfect policy still scores 1.000, and both orders occur.
 
 Two consequences. First, this is a **confound for any clean-versus-poisoned
 comparison**, because the two subsets need not have the same parity composition -- at
