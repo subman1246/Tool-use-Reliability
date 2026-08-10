@@ -408,64 +408,69 @@ was never poisoned". We report it as undefined with the observation count attach
 **do not pool it into any suite-level estimate**. If the depth-6 bin produces no errors
 either, it stays undefined and is reported that way.
 
-### 4.1b A branch-choice bias, and why one severity estimate came out negative
+### 4.1b Rule-following measured directly: discrimination, and a revision
 
-Estimated per step rather than pooled, one conditional $\pi$ came out at **-0.312**
-(step 1, `llama-3.1-8b-instant`: poisoned 0.727 against clean 0.554). Instead of
-assuming small-sample noise we looked for a mechanism, and found one.
+An earlier version of this section reported the parity effect from a cache replay covering
+depths 1, 2 and 4 only. The step records now carry the held value and the presentation order
+directly, so the statistic is computed over **all** collected data including depth 6. Two of
+the numbers changed materially, and the revised picture is cleaner than the original.
 
-Rule application depends strongly on the parity of the held value, in opposite
-directions for the two models:
+**The statistic.** Define *discrimination* as
+$P(\text{pick first-listed tool} \mid \text{ref even}) -
+P(\text{pick first-listed tool} \mid \text{ref odd})$. The rule text lists the even branch
+first, so 0 means the model ignores the value it is conditioning on, +1 means it applies the
+rule perfectly, and a negative value means it is anti-correlated with the rule.
 
-| model | accuracy, held ref even | held ref odd |
-|---|---|---|
-| llama-3.1-8b-instant | 0.525 (n=219) | **0.742** (n=221) |
-| allam-2-7b | **0.647** (n=221) | 0.169 (n=219) |
+| model | $n$ | first-listed, overall | ref even | ref odd | **discrimination** | SE | $z$ |
+|---|---|---|---|---|---|---|---|
+| `qwen3.6-27b` | 292 | 0.497 | 1.000 | 0.000 | **+1.000** | 0.000 | — |
+| `openai/gpt-oss-120b` | 352 | 0.486 | 0.983 | 0.006 | **+0.977** | 0.011 | +85.8 |
+| `llama-3.3-70b-versatile` | 154 | 0.481 | 0.886 | 0.053 | **+0.833** | 0.044 | +18.9 |
+| `llama-3.1-8b-instant` | 990 | 0.487 | 0.562 | 0.412 | **+0.149** | 0.031 | +4.8 |
+| `allam-2-7b` | 674 | 0.685 | 0.595 | 0.777 | **−0.182** | 0.035 | **−5.2** |
 
-The cause is a bias toward the first-listed branch (the rule text lists the even branch
-first). Measuring the choice itself:
+**Discrimination orders the suite, and the aggregate does not.** The overall first-listed rate
+is 0.481–0.497 for four of the five models -- indistinguishable, and consistent with no
+position bias at all. The same data resolves discrimination from +1.000 down to −0.182. This is
+the shared-assumption hazard again: an aggregate over the conditioning variable hides exactly
+the quantity of interest, and splitting by it recovers a clean ordering that matches the
+reliability ordering (`qwen` never errs; `allam` has the largest $L_t$).
 
-| model | picks first-listed, ref even | ref odd | discrimination |
-|---|---|---|---|
-| llama-3.1-8b-instant | 0.525 | 0.258 | **+0.267** |
-| allam-2-7b | 0.827 | 0.786 | **+0.041** |
+**`allam-2-7b` is anti-correlated with the rule, which is worse than ignoring it.**
+Discrimination −0.182 at $z = -5.2$: it picks the first-listed tool *more* often when the ref is
+odd (0.777) than when it is even (0.595), so its bias is strongest exactly where it is wrong.
+Its accuracy split reflects this -- 0.595 on even refs against **0.223** on odd. A model that
+merely ignored the rule would sit near 0 and score ~0.5 on both.
 
-`allam-2-7b` picks the first-listed tool ~80% of the time almost regardless of the value
-it is supposed to be conditioning on. Its discrimination is 0.041: **it is not following
-the routing rule at all**, and its apparent competence when the ref happens to be even
-is the bias coinciding with the answer. `llama-3.1-8b-instant` does discriminate
-(+0.267), weakly but genuinely.
+**Two corrections to the earlier subset-based numbers.**
 
-**The confound, and why the discrimination statistic resolves it.** With a fixed
-presentation order these two accounts predict overlapping data: the rule text always
-lists the even branch first, so *the correct tool for an even ref is also the
-first-listed tool*. "Always picks the first-listed option" and "follows the rule but
-only succeeds on even refs" therefore produce the same accuracy pattern, and accuracy
-alone cannot separate them.
+1. `allam-2-7b` was reported as "picks the first-listed tool ~80% of the time almost regardless
+   of the ref, discrimination 0.041". On full data its overall rate is **0.685**, not ~0.80, and
+   its discrimination is **−0.182**, not ~0. The qualitative claim that it is not applying the
+   rule survives and strengthens; the specific characterisation as an unconditional position
+   bias does not. It is an anti-correlated bias.
+2. `llama-3.1-8b-instant`'s parity *accuracy* asymmetry has largely **vanished**. The subset gave
+   0.525 on even refs against 0.742 on odd; full data gives 0.562 against 0.588. So the large
+   asymmetry attributed to that model was a property of the shallow-depth subset, not of the
+   model. Its discrimination also fell, from +0.267 to +0.149, though it remains clearly
+   positive ($z = +4.8$).
 
-Discrimination separates them because it conditions on the ref rather than on the
-outcome. A pure position bias picks the first-listed tool at the same rate whatever the
-ref, so its discrimination is 0 by construction, *however high or low its accuracy*. A
-model applying the rule must pick the first-listed tool more often when the ref is even.
-The measured values -- 0.041 for `allam-2-7b` against 0.267 for `llama-3.1-8b-instant`
--- are therefore diagnostic of the mechanism and not of the accuracy, which is what
-makes them evidence.
+The surviving general claim is narrower than the earlier one and better supported: **parity of
+the held value affects rule application strongly in one model (`allam-2-7b`) and weakly or not
+at all in the others**, and discrimination rather than accuracy is the statistic that shows it.
 
-We nonetheless run the direct control, because it is cheap: `config/shuffle_control.yaml`
-randomises which branch is listed first at each step, which decouples position from
-parity outright and lets accuracy be compared across the four cells (ref parity x
-presentation order). It costs 860,310 tokens, 0.63 days of suite-wide allowance, against
-2.9 days for the primary arm's depth-8 bin alone. `tests/test_shuffle_control.py` asserts
-the control is inert: gold trajectories are bit-identical to the unshuffled tasks, a
-perfect policy still scores 1.000, and both orders actually occur.
+**The confound, and why discrimination resolves it.** With a fixed presentation order the
+correct tool for an even ref *is* the first-listed tool, so "always picks the first-listed
+option" and "applies the rule but only succeeds on even refs" predict the same accuracy pattern.
+Discrimination separates them because it conditions on the ref rather than on the outcome: a
+pure position bias returns 0 whatever its accuracy, since it picks the first-listed tool at the
+same rate either way. That is why the four models at ~0.49 overall are distinguishable at all.
 
-Two consequences. This is a **confound** for clean-versus-poisoned comparisons whenever
-the two subsets differ in parity composition -- at step 2 the clean subset was 69%
-even-held against 41% poisoned -- so every conditional $\pi$ above is parity-stratified
-and task-bootstrapped; the negative value does not survive that and the intervals
-exclude zero. And it is a finding in its own right about *how* rule application fails:
-not as noise around a correct rule but as a **default that ignores the conditioning
-variable**, which an aggregate correct-invocation rate hides entirely.
+The `shuffle` condition removes the confound outright by randomising which branch is listed
+first at each step, making position and parity independent. `first_listed_even` is recorded per
+step, so once that condition lands the four cells (ref parity x presentation order) settle it
+without relying on the statistic. Until then, discrimination is the evidence.
+
 
 ### 4.2 Zero syntactic errors, verified rather than assumed
 

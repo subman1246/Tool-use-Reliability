@@ -1020,64 +1020,55 @@ and recovery unmeasurable; conditional scoring makes the opposite trade. **Repor
 both is the defensible option**, which is why we keep gold-agreement as the headline
 and argue the conditional variant is required for any claim about severity or recovery.
 
-### 5.4b Why one severity estimate came out negative: a branch-choice bias
+### 5.4b Rule-following is measurable directly, and aggregates hide it
 
-Estimated per step rather than pooled, one conditional $\pi$ was **negative**
-(-0.312 at step 1 for `llama-3.1-8b-instant`: poisoned steps scored 0.727 against
-0.554 for clean). Rather than attribute that to small cells, we looked for a mechanism,
-and there is one.
+Define **discrimination** as $P(\text{pick first-listed tool} \mid \text{ref even}) -
+P(\text{pick first-listed tool} \mid \text{ref odd})$. The routing rule text lists the even
+branch first, so 0 means the model ignores the value it is supposed to condition on, +1 means it
+applies the rule perfectly, and a negative value means it is *anti*-correlated with the rule.
 
-**Rule application depends strongly on the parity of the held value, and the direction
-differs by model:**
+| model | $n$ | first-listed, overall | ref even | ref odd | **discrimination** | $z$ |
+|---|---|---|---|---|---|---|
+| `qwen3.6-27b` | 292 | 0.497 | 1.000 | 0.000 | **+1.000** | — |
+| `openai/gpt-oss-120b` | 352 | 0.486 | 0.983 | 0.006 | **+0.977** | +85.8 |
+| `llama-3.3-70b-versatile` | 154 | 0.481 | 0.886 | 0.053 | **+0.833** | +18.9 |
+| `llama-3.1-8b-instant` | 990 | 0.487 | 0.562 | 0.412 | **+0.149** | +4.8 |
+| `allam-2-7b` | 674 | 0.685 | 0.595 | 0.777 | **−0.182** | **−5.2** |
 
-| model | accuracy when held ref is even | when odd |
-|---|---|---|
-| llama-3.1-8b-instant | 0.525 (n=219) | **0.742** (n=221) |
-| allam-2-7b | **0.647** (n=221) | 0.169 (n=219) |
+**The aggregate is uninformative and the conditional statistic is decisive.** Overall
+first-listed rates are 0.481–0.497 for four of five models: indistinguishable, and consistent
+with no position bias whatever. The *same data* resolves discrimination across the full range,
+and the resulting order matches the reliability order independently established in §5.1 --
+`qwen3.6-27b` never errs, `allam-2-7b` has the largest $L_t$. This makes discrimination a
+per-model diagnostic of *whether a model performs the task at all*, distinct from how accurately
+it performs it, and it is invisible to any metric aggregated over the conditioning variable.
 
-The cause is a position bias toward the first-listed branch. The rule text lists the
-even branch first, and measuring the choice directly:
+**One model is anti-correlated with the rule, which is worse than ignoring it.** `allam-2-7b`
+scores −0.182 at $z = -5.2$: it picks the first-listed tool *more* often when the ref is odd
+(0.777) than when even (0.595), so its bias is strongest exactly where it is wrong. Its accuracy
+is 0.595 on even refs against 0.223 on odd. A model that merely ignored the rule would sit near
+0 and score about 0.5 on both. So `allam-2-7b`'s contribution to the suite's propagation loss is
+not "a weak model that errs more"; it is a model not performing the routing task.
 
-| model | picks first-listed tool, ref even | ref odd | discrimination |
-|---|---|---|---|
-| llama-3.1-8b-instant | 0.525 | 0.258 | **+0.267** |
-| allam-2-7b | 0.827 | 0.786 | **+0.041** |
+**Why discrimination and not accuracy.** With a fixed presentation order the correct tool for an
+even ref *is* the first-listed tool, so "always picks the first-listed option" and "applies the
+rule but only succeeds on even refs" predict the same accuracy pattern; accuracy cannot separate
+them. Discrimination conditions on the ref rather than on the outcome, so a pure position bias
+returns 0 whatever its accuracy. A dedicated control that randomises presentation order per step
+removes the confound outright and is reported in §5.9; the four resulting cells (ref parity x
+presentation order) settle it without relying on the statistic at all.
 
-`allam-2-7b` picks the first-listed tool about 80% of the time **almost regardless of
-the value it is conditioning on**. Its discrimination between the two cases is 0.041 --
-it is not following the routing rule at all, and its apparent competence when the ref
-happens to be even is an artifact of the bias coinciding with the answer.
-`llama-3.1-8b-instant` does discriminate (+0.267), weakly but genuinely.
-
-**The confound, and why discrimination resolves it.** With a fixed presentation order
-these two accounts predict overlapping data: the rule text always lists the even branch
-first, so the correct tool for an even ref *is* the first-listed tool. "Always picks the
-first-listed option" and "applies the rule but only succeeds on even refs" produce the
-same accuracy pattern, and accuracy cannot separate them.
-
-Discrimination can, because it conditions on the ref rather than on the outcome. A pure
-position bias picks the first-listed tool at the same rate whatever the ref, so its
-discrimination is 0 by construction *whatever its accuracy*, while a model applying the
-rule must pick the first-listed tool more often when the ref is even. The measured 0.041
-against 0.267 is therefore diagnostic of the mechanism rather than of the accuracy, which
-is what makes it evidence.
-
-We also run the direct control, because costing it showed it is cheap. Randomising which
-branch is listed first at each step decouples position from parity outright, letting
-accuracy be compared across the four cells (ref parity x presentation order). It costs
-0.63 days of suite-wide token allowance against 2.9 days for the primary arm's depth-8
-bin alone, and the control is asserted inert: gold trajectories are bit-identical to the
-unshuffled tasks, a perfect policy still scores 1.000, and both orders occur.
-
-Two consequences. First, this is a **confound for any clean-versus-poisoned
-comparison**, because the two subsets need not have the same parity composition -- at
-step 2 the clean subset was 69% even-held against 41% for the poisoned subset. All
-conditional $\pi$ estimates in §5.4a are therefore parity-stratified; the negative
-per-step value does not survive stratification and pooling, and the resulting intervals
-exclude zero. Second, it is a finding in its own right about *how* rule application
-fails: not as noise around a correct rule, but as a **default that ignores the
-conditioning variable**. An aggregate correct-invocation rate hides this completely --
-`allam-2-7b` scores 0.647 on half the cases while performing no conditioning at all.
+**A revision, recorded rather than absorbed.** Earlier analysis of this effect used a cache
+replay covering depths 1, 2 and 4. The step records now carry the held value and presentation
+order directly, so the statistic above is computed over all collected data including depth 6, and
+two numbers moved. `allam-2-7b`'s overall first-listed rate is 0.685 rather than ~0.80 and its
+discrimination −0.182 rather than ~0, so the qualitative conclusion strengthens while its
+characterisation as an *unconditional* position bias does not survive. More importantly,
+`llama-3.1-8b-instant`'s parity accuracy asymmetry largely **disappeared**: 0.525/0.742 on the
+shallow subset became 0.562/0.588 on full data. That asymmetry was a property of the subset, not
+of the model. We report the narrower surviving claim -- parity strongly affects rule application
+in one model and weakly or not at all in the others -- and note that the earlier, broader version
+would have survived into print had the statistic not been recomputed on complete data.
 
 
 ### 5.5 Severity and recovery: the fitted posteriors
