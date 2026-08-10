@@ -11,6 +11,19 @@ wrong year; it is the fourth box on each entry — attributing a claim the cited
 not make. That is what a reviewer in the area catches immediately, and it is the one thing
 mechanical extraction cannot help with.
 
+## A methods point about auditing citations
+
+**Automated extraction is a floor and needs manual cross-validation; one apparent gap here
+was a parsing artifact, not a missing citation.** A regex over `(Author, Year)` forms
+reported three works as discussed-but-uncited, which would have been a genuine defect. They
+were cited; the citations wrapped across line breaks and the pattern required a literal
+space. Acting on the automated output would have duplicated three citations while
+"fixing" nothing.
+
+The general lesson for anyone auditing this way: an extraction tool's false negatives
+become false *positives* about missing citations, which read as findings rather than as
+tool failures. Cross-validate against the prose before acting on any gap it reports.
+
 ## Inventory
 
 **16 distinct citations, and every one appears in both `PAPER_DRAFT.md` and

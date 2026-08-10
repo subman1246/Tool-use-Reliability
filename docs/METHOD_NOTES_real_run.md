@@ -145,9 +145,14 @@ design. So RPD decides nothing here, TPM decides how long a day's work takes, an
 TPD (previous section) decides how many days there are. Three different ceilings,
 and the run has to clear all three.
 
-Three models are swept **concurrently** — the caps are per model, so concurrent
-models are not drawing down a shared allowance, and calendar time becomes the
-slowest model rather than the sum over models.
+All six models are swept **concurrently** (`sweeping 6 model(s) with 6 concurrent
+job(s)`, confirmed in the run log). The caps are per model, so concurrent models do
+not draw down a shared allowance, and calendar time is the slowest model rather than
+the sum over models. This matters more than it sounds: because each pool refills
+independently at `TPD/86400` whether or not other models are being called, running
+sequentially would waste calendar time at no benefit. It is the only scheduling lever
+available, and it is already pulled — the remaining duration is an external refill
+constraint, not a scheduling problem.
 
 A separate correction to an earlier note in this file: the daily allowance was
 described as a request bucket, and it is really a *token* bucket, refilling at
