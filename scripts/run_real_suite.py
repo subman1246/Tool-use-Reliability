@@ -43,6 +43,7 @@ from tur.harness.runner import (run_free, run_teacher_forced, LiteLLMBackend,
 from tur.analysis.aggregate import (load_records, aggregate_by_depth,
                                     stats_to_arrays, bootstrap_L_ci,
                                     aggregate_by_step, measure_recovery)
+from tur.harness.budget import plan_suite, pooled_step_errors
 from tur.model.hierarchical import build_and_sample
 
 
@@ -281,6 +282,7 @@ def main():
     feedback = FeedbackMode(cfg.get("feedback", "structured"))
     models = cfg.get("models", [])
     variant = cfg.get("task_variant", "routing")
+    budget_days = cfg.get("budget_days")
 
     # The control arm is a second, much smaller sweep on the OTHER task variant.
     # Its expected result is L_t ~ 0, and it is run per model alongside the
@@ -338,6 +340,44 @@ def main():
     if known_tpd:
         print(f"Seeding limiters with previously discovered TPD: {known_tpd}")
 
+    # Resolve the nested unequal-n allocation. `per_depth` from config is the
+    # REFERENCE (the most any model runs); each model gets a nested prefix of it
+    # sized to its own measured TPD over `budget_days`. Prefer a TPD learned at
+    # runtime over the config value: the config records what was measured, the
+    # discovered file records what this account is actually being given now.
+    plans = {}
+    if budget_days and not args.pilot and isinstance(per_depth, dict):
+        for m in models:
+            m.setdefault("tpd", None)
+            if known_tpd.get(m["name"]):
+                m["tpd"] = known_tpd[m["name"]]
+        model_plans, unit_p, unit_c = plan_suite(
+            models, days=budget_days, headroom=args.headroom,
+            ref_primary=per_depth,
+            ref_control=dict(ctrl_pd) if isinstance(ctrl_pd, dict) else {},
+            control_variant=ctrl_variant or "linear",
+            primary_variant=variant, distractor_level=distractor_level,
+            max_retries=max_retries)
+        plans = {p.name: p for p in model_plans}
+        print(f"\nNESTED ALLOCATION over a {budget_days}-day window "
+              f"(headroom {args.headroom:.0%})")
+        print(f"  measured tokens/task, {variant}: {unit_p}")
+        if unit_c:
+            print(f"  measured tokens/task, {ctrl_variant}: {unit_c}")
+        print(f"  {'model':<31}{'TPD':>8}{'budget':>10}{'scale':>7}"
+              f"{'primary n':>24}{'used':>6}")
+        for p in model_plans:
+            alloc = " ".join(f"{p.primary[d]:>3}" for d in sorted(p.primary))
+            print(f"  {p.name:<31}{p.tpd:>8,}{p.budget_tokens:>10,}"
+                  f"{p.scale:>7.2f}{alloc:>24}{p.utilisation:>6.0%}")
+            for note in p.notes:
+                print(f"      note: {note}")
+        pooled = pooled_step_errors(model_plans)
+        usable = sum(1 for v in pooled.values() if v >= 30)
+        print(f"  pooled per-step fresh errors (H4 projection): "
+              + " ".join(f"s{i}={v:.0f}" for i, v in pooled.items())
+              + f"  -> {usable}/8 bins clear 30")
+
     def sweep_one(m: dict) -> dict:
         """One model: primary arm, then control arm. Runs in its own thread.
 
@@ -350,22 +390,29 @@ def main():
         """
         name = m["name"]
         lines: list[str] = []
-        log(lines, f"\n=== running {name} [{variant}] ===")
+        plan = plans.get(name)
+        my_primary = plan.primary if plan else per_depth
+        my_control = plan.control if plan else ctrl_pd
+        my_tpd = (plan.tpd if plan else None) or known_tpd.get(name) or m.get("tpd")
+        log(lines, f"\n=== running {name} [{variant}] "
+                   f"n={sum(my_primary.values()) if isinstance(my_primary, dict) else my_primary}"
+                   f"{f' (nested prefix, scale {plan.scale:.2f})' if plan else ''} ===")
         recs, stats, capped = run_model(
-            m, depths, per_depth, seeds, max_retries, distractor_level,
+            m, depths, my_primary, seeds, max_retries, distractor_level,
             feedback, args.call_mode, cache_dir, args.headroom,
-            variant=variant, tpd=known_tpd.get(name), lines=lines)
+            variant=variant, tpd=my_tpd, lines=lines)
         out = {"model": m, "records": recs, "stats": stats, "capped": capped,
-               "lines": lines, "control": None}
+               "lines": lines, "control": None, "plan": plan,
+               "primary_alloc": my_primary, "control_alloc": my_control}
         if capped:
             return out
         if ctrl_variant:
             log(lines, f"  {name}: primary arm done, running "
                        f"{ctrl_variant} control arm")
             c_recs, c_stats, c_capped = run_model(
-                m, ctrl_depths, ctrl_pd, seeds, max_retries, distractor_level,
+                m, ctrl_depths, my_control, seeds, max_retries, distractor_level,
                 feedback, args.call_mode, cache_dir, args.headroom,
-                variant=ctrl_variant, tpd=known_tpd.get(name), lines=lines)
+                variant=ctrl_variant, tpd=my_tpd, lines=lines)
             out["control"] = {"records": c_recs, "stats": c_stats,
                               "capped": c_capped}
         return out
@@ -386,36 +433,81 @@ def main():
                          for r in results
                          if r["stats"].get("limiter", {}).get("tpd_discovered")})
 
+    def achieved_n(records: list[dict]) -> dict[int, int]:
+        """Per-depth task counts actually completed, from the records."""
+        seen: dict[int, set] = {}
+        for rec in records:
+            seen.setdefault(rec["depth"], set()).add(rec["task_id"])
+        return {d: len(v) for d, v in sorted(seen.items())}
+
+    # A cap-stop no longer aborts the run, and this is a direct consequence of the
+    # nested design rather than a relaxation of standards. Tasks are generated in a
+    # deterministic order, so a sweep cut short partway leaves exactly a PREFIX of
+    # its allocation -- which is itself a valid, smaller nested allocation. The data
+    # is therefore usable on the same terms as any other model's, provided the n
+    # actually achieved is recorded rather than the n that was requested. Under the
+    # earlier equal-n design a truncated sweep really was unusable, because it broke
+    # the assumption that every model ran the same tasks; that assumption is gone.
+    #
+    # What must not happen is a truncated sweep being reported as if it had the n it
+    # asked for, so the achieved allocation is recorded per model and any shortfall
+    # is stated loudly here and carried into the meta file.
     capped_runs = [r for r in results if r["capped"]
                    or (r["control"] or {}).get("capped")]
-    if capped_runs:
-        for r in capped_runs:
-            nm = r["model"]["name"].replace("/", "_")
-            part = f"{OUT_DIR}/{tag}_{nm}.partial.jsonl"
-            with open(part, "w") as fh:
-                for rec in r["records"]:
-                    fh.write(json.dumps(rec) + "\n")
-        print("\n" + "=" * 70)
-        print("RUN HALTED: daily allowance exhausted")
-        print("=" * 70)
-        for r in capped_runs:
-            print(f"  capped       : {r['model']['name']}")
-            print(f"  records kept : {len(r['records'])} -> "
-                  f"{tag}_{r['model']['name'].replace('/', '_')}.partial.jsonl")
-            print(f"  backend      : {r['stats']}")
-        done = [r["model"]["name"] for r in results
-                if not (r["capped"] or (r["control"] or {}).get("capped"))]
-        print(f"  completed    : {done}")
+    shortfall = {}
+    for r in results:
+        got = achieved_n(r["records"])
+        want = (r["primary_alloc"] if isinstance(r["primary_alloc"], dict)
+                else {d: r["primary_alloc"] for d in depths})
+        missing = {d: (want.get(d, 0), got.get(d, 0)) for d in depths
+                   if got.get(d, 0) < want.get(d, 0)}
+        if missing:
+            shortfall[r["model"]["name"]] = {
+                "requested": want, "achieved": got,
+                "capped": bool(r["capped"]),
+                "control_run": r["control"] is not None}
+    if capped_runs or shortfall:
+        print("\n" + "=" * 72)
+        print("ALLOWANCE EXHAUSTED FOR SOME MODELS -- reporting achieved n")
+        print("=" * 72)
+        for name, info in shortfall.items():
+            print(f"  {name}")
+            print(f"    requested {info['requested']}")
+            print(f"    achieved  {info['achieved']}"
+                  + ("  (cap-stopped)" if info["capped"] else ""))
+            if not info["control_run"]:
+                print("    control arm NOT run for this model")
         print()
-        print("  Nothing was written to the normal output path for a capped")
-        print("  model, so a partial sweep cannot be analysed as if it were")
-        print("  complete. Every successful call is in the response cache, so")
-        print("  re-running the same command once the allowance resets replays")
-        print("  finished work for free and continues from there.")
-        if known_tpd:
-            print(f"  discovered TPD so far -> {TPD_PATH}")
-        print("=" * 70)
+        print("  These are nested prefixes of the requested allocations, so the")
+        print("  data is usable at the achieved n. Every successful call is in the")
+        print("  response cache, so re-running once the allowance refills replays")
+        print("  finished work for free and extends the prefix. Groq's caps refill")
+        print("  continuously rather than resetting at midnight, so the sustained")
+        print("  rate is TPD/86400 tokens per second.")
+        print(f"  discovered TPD -> {TPD_PATH}")
+        print("=" * 72)
+
+    usable, dropped = [], []
+    for r in results:
+        got = achieved_n(r["records"])
+        # a model needs at least two populated depth bins for a depth trend to
+        # mean anything, and depth 1 alone cannot show propagation at all
+        if len([d for d, n in got.items() if n >= 3]) < 2:
+            dropped.append((r["model"]["name"], got))
+            continue
+        usable.append(r)
+    if dropped:
+        print("\n  EXCLUDED from the fit (too little data to estimate a depth "
+              "trend):")
+        for name, got in dropped:
+            print(f"    {name}: achieved {got}")
+        print("    Their raw rows are still written; they are excluded from the")
+        print("    hierarchical fit only, and the exclusion is recorded in meta.")
+    if not usable:
+        print("\nNo model has enough data to analyse yet. Re-run once the token")
+        print("allowance refills; cached work replays for free.")
         raise SystemExit(2)
+    results = usable
 
     for r in results:
         m, records, stats = r["model"], r["records"], r["stats"]
@@ -500,7 +592,7 @@ def main():
                    for d in ctrl_depths}
             control[m["name"]] = {
                 "variant": ctrl_variant, "depths": ctrl_depths,
-                "per_depth": ctrl_pd, "L_ci": c_L,
+                "per_depth": r["control_alloc"], "L_ci": c_L,
                 "backend_stats": r["control"]["stats"],
                 "by_depth": [{"depth": s.depth, "p_t": s.p_t, "g_t": s.g_t,
                               "L_t": s.L_t, "n_p": s.n_p, "n_g": s.n_g,
@@ -569,7 +661,20 @@ def main():
                   "priors_used": {"r_syn": prior_rs, "r_sem": prior_rm},
                   "task_variant": variant, "control_arm": control,
                   "structural_anomalies": anomalies,
-                  "discovered_tpd": load_discovered_tpd()},
+                  "discovered_tpd": load_discovered_tpd(),
+                  # the nested design means n differs by model; record the
+                  # resolved allocation so a reader can see exactly which prefix
+                  # each model ran rather than inferring it from row counts
+                  "budget_days": budget_days,
+                  "reference_per_depth": per_depth,
+                  "achieved_shortfall": shortfall,
+                  "excluded_from_fit": {n: g for n, g in dropped},
+                  "allocation": {p.name: {
+                      "tpd": p.tpd, "budget_tokens": p.budget_tokens,
+                      "scale": round(p.scale, 4), "primary": p.primary,
+                      "control": p.control, "projected_tokens": p.cost_tokens,
+                      "projected_calls": p.calls, "notes": p.notes}
+                      for p in plans.values()}},
                  fh, indent=2)
 
     print(f"\nsaved -> {OUT_DIR}/{tag}_idata.pkl, {tag}_meta.json")

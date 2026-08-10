@@ -52,7 +52,69 @@ different claim from "we assumed it was fine", and because the headroom figure
 tells a replicator how much larger the task suite could grow before that model
 would need dropping.
 
-## Tokens per minute is the binding constraint, not requests per day
+## Tokens per DAY is the binding constraint, it is undocumented, and it is not uniform
+
+This is the single most consequential operational fact about running this study
+on Groq's free tier, and it is documented nowhere we could find. Anyone
+replicating will hit it.
+
+**TPD appears in no response header.** Groq returns
+`x-ratelimit-limit-requests`, `x-ratelimit-limit-tokens` (per minute), and their
+`remaining`/`reset` counterparts. For tokens per day, every model in the suite
+returns `-`. The only place the number appears is the **body of the 429 that
+enforces it**:
+
+```
+Rate limit reached for model `llama-3.3-70b-versatile` in organization
+`org_...` service tier `on_demand` on tokens per day (TPD):
+Limit 100000, Used 99442, Requested 679.
+```
+
+So the limit is discoverable only by being refused by it. The harness therefore
+parses the figure out of the 429 body, records it, and persists it to
+`data/results/discovered_tpd.json` so that later days plan against a measured
+value instead of rediscovering it by being blocked again.
+
+**The values are not uniform, so one observation does not generalise.** Measured
+2026-08-10, each from the 429 that enforced it:
+
+| Model | TPD (measured) | RPD | TPM |
+|---|---|---|---|
+| `groq/llama-3.1-8b-instant` | > 500,000 (not reached) | 14,400 | 6,000 |
+| `groq/llama-3.3-70b-versatile` | **100,000** | 1,000 | 12,000 |
+| `groq/openai/gpt-oss-20b` | 200,000 | 1,000 | 8,000 |
+| `groq/openai/gpt-oss-120b` | 200,000 | 1,000 | 8,000 |
+| `groq/qwen/qwen3.6-27b` | 200,000 | 1,000 | 8,000 |
+| `groq/allam-2-7b` | **500,000** | 7,000 | 6,000 |
+
+A 5× spread, and the *lowest* TPD belongs to the model with the *highest* TPM —
+so TPD cannot be inferred from any other published limit. Our own first estimate
+extrapolated the one pilot observation (200,000) to all six models and was wrong
+in both directions: too generous for `llama-3.3-70b` and far too stingy for the
+two high-RPD models.
+
+**The caps refill continuously rather than resetting at midnight.** The 429 for a
+daily cap quotes a retry delay of one to three minutes, not hours, and the
+observed `x-ratelimit-reset-requests` for a 1,000/day model is 1m26.4s, which is
+exactly 86,400/1,000 seconds. So these behave as token buckets refilling at
+`TPD/86400` per second. A run can burst to the bucket size and then proceeds at
+the sustained rate, which is why spreading a sweep across days works at all, and
+why a cap-stop can be resumed within minutes rather than waiting for a reset.
+
+**Scale of the problem for this study.** Routing cost is roughly quadratic in
+depth — the schema grows with depth *and* the whole prompt is re-sent at every
+step — measured at 640 tokens for a depth-1 task and 24,447 for a depth-8 task,
+both arms, under an erring policy. The originally planned sweep came to 2.9M
+tokens per model, i.e. 37 days against the binding model's 100,000/day. That is
+what forced the nested unequal-n design in the next section.
+
+One artifact worth flagging so it is not misread: `gpt-oss-20b` cap-stopped after
+21 tasks on the first day of the real run, far earlier than its siblings. That
+was not a lower cap. Pilot runs earlier the same day had already consumed 199,718
+of its 200,000 tokens. **Pilots draw on the same daily allowance as the real run**,
+which is easy to forget when the pilot is cheap in wall-clock terms.
+
+## Tokens per minute is the binding constraint within a day
 
 Provider documentation leads with requests-per-day, and Groq's docs quote an
 org-wide 14,400/day. Both framings are misleading for this workload, in two
@@ -74,27 +136,91 @@ far lower than the headline for most models. Read from the
 Only one model in the suite gets the documented 14,400. The rest get 1,000,
 which is what actually sizes the experiment.
 
-Second, and more importantly for anyone replicating: the sweep is **throughput-
-bound, not request-bound**. At 2,780 calls and ~2.0M tokens per model, the daily
-request cap is cleared comfortably when spread over three days (927/day), but
-the tokens-per-minute ceiling dictates 3.7–7.4 hours of wall clock *per model*
-regardless — roughly 35 hours for the six-model suite run sequentially. The
-request count is the constraint that decides whether the run is *possible*; TPM
-is the constraint that decides how *long* it takes, and it is the one that
-actually hurts.
+Second: **within** a day the sweep is throughput-bound rather than request-bound.
+The daily request cap is cleared comfortably, but the tokens-per-minute ceiling
+dictates several hours of wall clock per model regardless. Observed on the real
+run: `llama-3.1-8b-instant` accumulated 5,361 seconds of deliberate pacing sleep
+across 675 calls, i.e. the run spends most of its wall clock waiting on TPM by
+design. So RPD decides nothing here, TPM decides how long a day's work takes, and
+TPD (previous section) decides how many days there are. Three different ceilings,
+and the run has to clear all three.
 
-A practical consequence: the per-model daily allowance behaves as a
-continuously-refilling bucket rather than a calendar-day counter. The observed
-`x-ratelimit-reset-requests` for a 1,000/day model was 1m26.4s, which is exactly
-86,400/1,000 seconds — one day's worth of refill per request. So a run can burst
-up to the bucket size and then proceeds at the sustained rate, which is why
-spreading across days works at all.
+Three models are swept **concurrently** — the caps are per model, so concurrent
+models are not drawing down a shared allowance, and calendar time becomes the
+slowest model rather than the sum over models.
+
+A separate correction to an earlier note in this file: the daily allowance was
+described as a request bucket, and it is really a *token* bucket, refilling at
+`TPD/86400` per second. Both refill continuously; it is the token one that binds.
 
 The harness paces against TPM at 80% of the ceiling (`--headroom`) rather than
 riding it, because the token estimate is approximate and overshooting converts
 directly into provider 429s and wasted retries. Per-model `rpd`/`tpm` live in
 `config/default.yaml` and are read by both the runner and `estimate_cost.py`, so
 there is one source of truth.
+
+## Why n differs across models: the nested unequal-n design
+
+A reader will notice that the six models do not run the same number of tasks. That
+is deliberate and it is not a compromise on comparability. The short version: the
+models share a common *prefix* of one task suite, and comparisons are made on that
+prefix, while each model's own estimates use everything it ran.
+
+**The problem.** The binding constraint is the per-model daily token allowance,
+and it spans 5× across the suite (100,000 for `llama-3.3-70b` against 500,000 for
+`allam-2-7b`; see the previous section). Sizing every model to the smallest
+allowance — the obvious way to keep the suite comparable — wastes almost all the
+capacity of the others. Measured over the same 8-day window it gives 240 usable
+tasks across the suite against 817 for the nested design, a factor of 3.4.
+
+**The design.** `per_depth` in `config/default.yaml` is a *reference* allocation:
+the most any model runs. Each model runs a nested prefix of it, scaled to its own
+measured TPD over `budget_days`. Both arms scale by the same factor, so the
+control arm shrinks alongside the primary rather than crowding it out on the
+poorest model.
+
+**Why nesting is exact rather than conventional.** The suite generators emit tasks
+depth by depth with `k` ascending, and a task's id and content depend only on
+`(depth, k, base_seed)` — never on how many tasks were requested. So asking for 12
+tasks at depth 4 returns precisely the first 12 of what asking for 65 returns, same
+ids, same gold trajectories. This is asserted in `tests/test_nesting.py` rather
+than assumed, because if it ever broke, every cross-model contrast would silently
+stop being paired and nothing would raise.
+
+**What it buys, and what it costs.**
+
+* Cross-model contrasts — the scale and family axes, and the paired bootstrap —
+  are computed on the common prefix and remain exactly paired, as they were under
+  equal n.
+* Each model's own $p_t$, $g_t$ and $L_t$ use its full n, so the high-allowance
+  models get tighter intervals instead of being truncated to the poorest model's.
+* The hierarchical fit needs no change at all: its likelihood is binomial with
+  per-model trial counts, which already accommodates unequal n. The partial
+  pooling then does what it is for — the low-n models are shrunk further toward
+  their family mean, which is the correct behaviour rather than a workaround.
+* The cost is unequal precision across models, and it is not evenly distributed:
+  `llama-3.3-70b` runs 59 tasks against `allam-2-7b`'s 297, so its per-model
+  intervals are materially wider. That model is retained rather than dropped
+  because it is the only *dense* scale-within-family contrast in the suite —
+  `gpt-oss` is sparse MoE — and H2 needs it. Lower n with wider intervals is
+  exactly what nesting is for.
+* Pooled per-step counts for H4 draw their mass from the high-allowance models,
+  which is the only reason H4 remains testable here at all: pooled usable step
+  indices go from 2 under equal n to 6 under nesting, in the pessimistic recovery
+  band.
+
+**A consequence for interrupted runs.** Because a sweep generates tasks in a fixed
+order, a run cut short by an exhausted allowance leaves exactly a prefix of its
+allocation — which is itself a valid, smaller nested allocation. So partial sweeps
+are usable on the same terms as any other model's data, provided the n *achieved*
+is recorded rather than the n requested. The runner records the achieved per-depth
+counts, states any shortfall loudly, and carries both into the run metadata. Under
+the earlier equal-n design a truncated sweep genuinely was unusable, because it
+broke the assumption that every model ran the same tasks; that assumption is gone.
+
+Models are excluded from the hierarchical fit only if fewer than two depth bins
+reached three tasks, since a depth trend cannot be estimated from less. Exclusions
+are recorded in the metadata, and the raw rows are still written.
 
 ## MoE scale is reported on both axes, because they disagree
 
