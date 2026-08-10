@@ -140,6 +140,41 @@ its 200,000 daily tokens before the sweep began, so it cap-stopped at its first
 task. Excluded from the fit; its allocation is unchanged, and it will fill in as
 its bucket refills. This is a drawdown artifact, not a low cap.
 
+### 2.1a Depth 6 for the larger models: the ceiling breaks for two of three
+
+The depth-6 bin was the outstanding question for the three models that looked
+ceiling-limited at depths 1-4, because it is the first bin where an error has somewhere
+to propagate to. It has now landed, and it separates them.
+
+| model | depth | $p_t$ | $g_t$ | $L_t$ | 89% CI | $n_g$ | fresh errors |
+|---|---|---|---|---|---|---|---|
+| llama-3.3-70b-versatile | 4 | 0.865 | 0.865 | +0.000 | [+0.000, +0.000] | 52 | 6 |
+| | **6** | 0.896 | 0.771 | **+0.140** | [+0.000, +0.362] | 48 | 3 |
+| gpt-oss-120b | 4 | 0.991 | 0.964 | +0.027 | [+0.000, +0.083] | 112 | 1 |
+| | **6** | 0.991 | 0.947 | **+0.044** | [+0.000, +0.135] | 114 | 1 |
+| qwen3.6-27b | 4 | 1.000 | 1.000 | +0.000 | [+0.000, +0.000] | 112 | 0 |
+| | **6** | 1.000 | 1.000 | **+0.000** | [+0.000, +0.000] | 66 | 0 |
+
+**`llama-3.3-70b-versatile` leaves the ceiling.** Its $L_t$ moves from exactly 0.000 at
+depth 4 to +0.140 at depth 6 -- the first propagation loss measured in a large model
+here. This is the outcome the anomaly detector's "benign" classification predicted: at
+depth 4 every one of its errors fell on the final step of the chain, where nothing
+downstream exists to poison, so propagation was impossible by construction rather than
+absent. Depth 6 gave those errors somewhere to go. The interval's lower bound is still
++0.000 at $n_g = 48$, so this is suggestive rather than established, and 14 of its 59
+tasks remain.
+
+**`gpt-oss-120b` errs, barely.** $L_6 = +0.044$ on a single fresh error, with an interval
+touching zero. Directionally consistent with propagation; not distinguishable from the
+null at this $n$.
+
+**`qwen3.6-27b` remains at ceiling, and is reported as such.** $p_t = g_t = 1.000$ at
+every depth reached, **zero errors across 256 free-arm steps**, and therefore **zero
+poisoned-context steps**. Its severity is undefined (see below) and its $L_t$ is 0
+because there is nothing to propagate, not because propagation was resisted. The fitted
+posterior of 0.501 for this model is the prior mean returned unchanged and is not
+reported as an estimate.
+
 ### 2.2 Three findings, and one thing that is not a finding yet
 
 **(a) Propagation is large, monotone in depth, and cleanly measured on the small
@@ -353,8 +388,9 @@ so the argument channel can fail on competence grounds.
 
 #### An undefined severity is the correct output, not a gap
 
-`qwen3.6-27b` produced **zero** poisoned-context steps across 452 records: it never once
-carried a wrong value forward. Its severity is therefore **undefined** -- not zero, and
+`qwen3.6-27b` produced **zero** poisoned-context steps across 256 free-arm steps spanning
+depths 1, 2, 4 and 6: it never once carried a wrong value forward, and the depth-6 bin --
+the first where propagation is structurally possible -- did not change that. Its severity is therefore **undefined** -- not zero, and
 not small. There is no conditional rate to form, because the conditioning event never
 occurred.
 
