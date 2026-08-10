@@ -862,6 +862,14 @@ value rather than a copy, so the argument channel can fail on competence grounds
 the decomposition holds there, it is promoted; if not, it stays suggestive with its
 limits visible.
 
+The transformed condition also re-tests the parity effect of §5.4b, for a reason worth
+stating: under `arg_shift` the value held at each step is
+$(\text{previous output} + k) \bmod M$ rather than a raw tool output, so the parity
+distribution of held values need not match the copy variant's. If the effect persists
+there it generalises; if it vanishes, it was an artifact of one variant's value
+distribution. Either outcome is reportable and costs nothing extra, because that
+condition is already scheduled.
+
 **What it costs, stated plainly.** There is no longer a single right answer per call:
 scoring must reconstruct what the model held at each step and evaluate a predicate
 against it, which is more implementation and more room to disagree about the predicate.
