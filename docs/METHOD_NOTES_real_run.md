@@ -279,6 +279,39 @@ the transform. The simulated policy produces both channels by construction, so i
 verifies the task permits them, not that models exercise them. That is the open
 question the variant exists to answer and it needs API budget.
 
+## The simulated validation cannot judge the transform variant, and proving that was the point
+
+Before committing 1.5 days of token budget to the transformed-argument condition, we ran
+the same four-policy ground-truth validation on it that was used for the copy variant
+(`validate_routing.py --arg-shift 7`). Two results, and the second is the more useful.
+
+**The estimator works on the transform variant.** The configured falling selection share
+is recovered at rho = -0.976, p < 0.0001, and the flat-mix control shows no trend
+(rho = +0.048, p = 0.91). So nothing about the transformed argument breaks the per-step
+composition machinery.
+
+**But the validation is identical to the copy variant's, digit for digit** -- 301 selection
+and 480 argument errors on flat-mix in both, the same rho and p throughout. That is not a
+coincidence and not a bug: the simulated policy decides selection-versus-argument from a
+configured `selection_share`, then emits either a wrong tool or the right tool with an
+offset value. Applying the argument transformation changes *which number* the offset is
+added to and nothing about the decision, and the RNG stream is identical, so the outcomes
+match exactly.
+
+The consequence is worth stating plainly, because it is the ninth artifact's pattern
+appearing prospectively rather than in hindsight: **the simulator is blind to the very
+difference the transform condition exists to test.** It can confirm the estimator recovers
+a trend that is put there by configuration; it cannot say whether a *real* model produces
+argument errors when arguments require arithmetic rather than copying. That question is
+answerable only by the real run, and the identity of these two tables is the proof that no
+amount of simulated validation substitutes for it.
+
+One incidental finding worth recording: `flat-strong`, a flat control, returns
+rho = -0.738 at p = 0.037 -- a spurious significant trend. At these per-policy error counts
+the per-model trend test has a non-negligible false-positive rate, which is independent
+support for reporting H4 pooled at suite level with per-model rho as directional evidence
+only, rather than testing each model separately.
+
 ## MoE scale is reported on both axes, because they disagree
 
 Two models in the suite are sparse mixture-of-experts, and for them "parameter
