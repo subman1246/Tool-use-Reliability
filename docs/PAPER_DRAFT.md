@@ -1350,6 +1350,25 @@ tool-reliability evaluation design.]*
 
 ## 7. Limitations
 
+**A recurring methodological hazard, stated first because it is the most transferable item in
+this section.** Three separate problems in this study had one shape: a constant estimated from
+part of the suite, or assumed for convenience, applied across a suite whose members differ in
+exactly the respect that constant depends on. A single output-token cost (40 per call, measured
+on terse models) hid that one model costs 262.6 and needed 0.6 more days. Treating held-value
+parity as incidental hid that `allam-2-7b` picks the first-listed tool regardless of the ref --
+discrimination 0.041, not applying the rule at all -- while scoring 0.647 where its bias happens
+to be correct. Measuring error composition per task depth hid that models differ in *where along
+a chain* they err, so a model with 0.857 of its errors on terminal steps read as immune to
+propagation. In each case the aggregate did not merely lose precision; it pointed the wrong way,
+or concealed that a model was not performing the task.
+
+The recommendation generalises beyond this study: **when evaluating a heterogeneous model suite,
+distrust every constant estimated from one model or assumed for convenience, and verify it
+per-model before trusting an aggregate built on it.** All three checks here were recomputations
+over data already collected.
+
+
+
 - **Simulation-based validation cannot test channels the mock bypasses.** Three
   separate defects in this work were invisible to a validation suite that
   reported a healthy pipeline, and all three share one cause: the simulated

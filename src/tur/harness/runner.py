@@ -314,13 +314,26 @@ class LiteLLMBackend:
                 resp = litellm.completion(**kwargs)
                 if self.limiter is not None:
                     self.limiter.sync_from_headers(_response_headers(resp))
-                msg = resp["choices"][0]["message"]
+                choice = resp["choices"][0]
+                msg = choice["message"]
                 if mode == "native" and msg.get("tool_calls"):
                     tc = msg["tool_calls"][0]["function"]
                     result = {"tool_call": {"name": tc["name"],
                                             "arguments": tc["arguments"]}}
                 else:
                     result = {"text": msg.get("content") or ""}
+                # finish_reason is recorded because it is the only DIRECT evidence
+                # that a completion was cut off at a token ceiling rather than
+                # ending naturally. Without it, truncation can only be inferred
+                # structurally (an unclosed reasoning tag, a response not ending
+                # in a closing brace), and a truncated completion is a third thing
+                # distinct from both a parse failure and a model error: it is a
+                # harness or provider configuration fault that merely LOOKS like
+                # malformed output. Storing it costs one field.
+                try:
+                    result["finish_reason"] = choice.get("finish_reason")
+                except AttributeError:
+                    result["finish_reason"] = None
                 if self.cache is not None:
                     self.cache.set(cache_key, result)
                 return result
@@ -571,6 +584,14 @@ class StepRecord:
     # defaulting to a fixed branch needs it. It was previously recoverable only by
     # replaying the whole sweep against the response cache.
     held_ref: int | None = None
+    # None means UNKNOWN, not False. Completions cached before finish_reason was
+    # recorded cannot say whether they were truncated, and encoding that as False
+    # would assert a verification that never happened. True means the provider
+    # reported finish_reason == "length": the completion was cut at a token
+    # ceiling, which is a harness/provider configuration fault that merely looks
+    # like malformed model output and must not be counted as either a parse
+    # failure or a model error.
+    truncated: bool | None = None
     # Which branch was presented first in the rule text at this step. With a fixed
     # presentation order, "picks the first-listed tool" and "applies the rule
     # correctly for even refs" predict overlapping data; recording the order lets
@@ -714,6 +735,8 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
             ctx = {"task": task, "step": t, "ref": carried, "attempt": attempt}
             messages.append({"role": "user", "content": f"[step {t}]", "_ctx": ctx})
             resp = backend.complete(messages, task.schema_view(), call_mode)
+            fr = resp.get("finish_reason") if isinstance(resp, dict) else None
+            was_truncated = (fr == "length") if fr is not None else None
             call = parse_response(resp, call_mode)
             ex = execute(task, call.tool or "", call.args or {}, feedback)
             score = score_step(
@@ -758,6 +781,7 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
             correct_given_state=final_score.correct_given_state,
             held_ref=carried_in,
             first_listed_even=_first_listed_even(task, t),
+            truncated=was_truncated,
             backend_error=bool(call and call.is_backend_error)))
     return records
 
@@ -803,6 +827,8 @@ def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
             ctx = {"task": task, "step": t, "ref": correct_ref, "attempt": attempt}
             messages.append({"role": "user", "content": f"[step {t}]", "_ctx": ctx})
             resp = backend.complete(messages, task.schema_view(), call_mode)
+            fr = resp.get("finish_reason") if isinstance(resp, dict) else None
+            was_truncated = (fr == "length") if fr is not None else None
             call = parse_response(resp, call_mode)
             final_call = call
             ex = execute(task, call.tool or "", call.args or {}, feedback)
@@ -828,7 +854,8 @@ def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
             args_correct_given_state=final_score.args_correct_given_state,
             correct_given_state=final_score.correct_given_state,
             held_ref=correct_ref,
-            first_listed_even=_first_listed_even(task, t)))
+            first_listed_even=_first_listed_even(task, t),
+            truncated=was_truncated))
     return records
 
 

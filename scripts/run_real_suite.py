@@ -221,6 +221,23 @@ def structural_anomalies(stats_by_depth, loaded: list[dict],
                        f"error-type decomposition has nothing to decompose, which "
                        f"is how the mis-bucketed selection errors presented")
 
+    # Truncated completions are a THIRD category, and must not be silently absorbed
+    # into either of the other two. finish_reason == "length" means the provider cut
+    # the response at a token ceiling: that looks like malformed output but is a
+    # configuration fault, not a model error and not a parse failure.
+    trunc = [r for r in loaded if r.get("truncated") is True]
+    known = [r for r in loaded if r.get("truncated") is not None]
+    if trunc:
+        out.append(f"{len(trunc)} of {len(known)} completions with a recorded "
+                   f"finish_reason were TRUNCATED at a token ceiling "
+                   f"({len(trunc) / max(1, len(known)):.1%}). These are a harness or "
+                   f"provider configuration fault, not model errors and not parse "
+                   f"failures, and must be excluded or fixed rather than scored.")
+    elif not known and loaded:
+        out.append("no completion carries a recorded finish_reason, so truncation "
+                   "cannot be checked directly for this data (it predates the field). "
+                   "Structural checks only: see the method notes.")
+
     pf = [s.parse_fail_rate for s in stats_by_depth if s.parse_fail_rate == s.parse_fail_rate]
     if pf and min(pf) > 0.5:
         out.append(f"parse failures exceed 50% at every depth (min "

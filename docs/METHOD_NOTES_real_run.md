@@ -378,9 +378,19 @@ syntactic error, so its measured clean baseline would have fallen from $p_t = 1.
 best in the suite, zero errors across 584 invocations -- to roughly 0.19, by far the worst.
 The direction of the result, not its precision, was decided by that one line.
 
-Two details worth keeping. **Zero responses "parsed but differently"**: where the old extractor
-succeeded it returned the same tool and arguments, so the failure mode is clean breakage rather
-than silent corruption -- which is the more dangerous alternative and did not occur. And the
+**Zero responses "parsed but differently", and this is the most important number in the table.**
+Where the old extractor succeeded, it returned the identical tool and arguments. So the failure
+mode is **clean breakage, not silent corruption**: the bad parser produced an *obviously* wrong
+number (81% of calls unparseable, which no one could mistake for a real result) rather than a
+*plausible* wrong number (calls that parse into subtly different arguments and score as ordinary
+semantic errors).
+
+That distinction is what scopes this finding. Silent corruption in a parser would be grounds to
+distrust every other result in the study, because it could have been quietly altering values
+everywhere without ever announcing itself. Clean breakage cannot do that -- it is loud by
+construction, and it is confined to the one model whose output format triggered it. So this is a
+finding about **parser robustness determining the direction of a result**, and specifically not a
+reason to doubt the rest of the measurements. And the
 single residual failure under the current parser, on `gpt-oss-120b`, is a model that replied
 with the literal string `[step 2]`: a genuine model failure, correctly classified as syntactic.
 
@@ -490,10 +500,50 @@ while being a harness configuration fault rather than a model error or a parse f
   markdown code fence, and all four parse correctly.
 
 So no truncated completion is being silently counted as `error_type: none` or folded into the
-parse-failure rate. **One honest limitation:** the response cache stores only the completion
-text, not `finish_reason`, so this check is structural rather than authoritative. Storing
-`finish_reason` alongside the text would make it a direct check, and is recommended for any
-replication -- it costs nothing and removes the inference.
+parse-failure rate.
+
+**This is now a direct check rather than an inference.** The two arguments above are structural,
+and structural arguments were good enough only until the cost of a direct check was measured at
+zero. The backend now records `finish_reason` on every completion and caches it; the run loop
+derives a `truncated` flag from it; and the anomaly detector reports truncated completions as a
+**third category**, distinct from both parse failures and model errors, because a completion cut
+at a token ceiling is a harness or provider configuration fault that merely looks like malformed
+output.
+
+The flag is deliberately three-valued. `None` means **unknown**, not "not truncated" --
+completions cached before the field existed cannot say whether they were cut off, and recording
+`False` there would assert a verification that never happened. `tests/test_truncation_label.py`
+locks all three cases in both run modes.
+
+Historical data therefore carries `truncated = None` and remains covered only by the structural
+argument; everything collected from here on carries direct evidence. Retro-fitting the field
+would require re-issuing the calls, which is the one thing the cache exists to avoid, so the
+split is documented rather than papered over.
+
+## The recurring shape: shared constants hide the outliers in a heterogeneous suite
+
+Three separate problems in this study have the same shape, and naming the shape once is worth
+more than the three fixes were individually.
+
+| Shared assumption | What it hid | How it surfaced |
+|---|---|---|
+| One output-token constant (40/call), estimated from terse models | `qwen3.6-27b` costs **262.6** tokens per call, 6.6x the constant, so its calendar projection was short by 0.6 days | measuring output tokens per model instead of using the constant |
+| Parity of the held value is incidental, so aggregate accuracy is enough | `allam-2-7b` picks the first-listed tool ~80% of the time regardless of the ref -- discrimination **0.041**, i.e. it is not applying the routing rule at all, while scoring 0.647 on the half of cases where its bias is right | splitting accuracy by the conditioning variable |
+| Error composition measured per task depth | *Where in the chain* each model errs differs by model: `llama-3.3-70b` had **0.857** of its depth-4 errors on the terminal step against 0.250 under uniform, so its $L_4$ read as immunity | resolving by step index and reporting terminal-error share |
+
+In each case a quantity estimated from one part of the suite, or assumed for convenience, was
+applied across a suite whose members differ in exactly the respect that quantity depends on. The
+aggregate was not merely imprecise -- it pointed the wrong way, or concealed that a model was not
+performing the task at all.
+
+**The recommendation, stated generally: when validating a heterogeneous model suite, distrust
+every constant that was estimated from one model or assumed for convenience, and check it
+per-model before trusting an aggregate built on it.** The check is usually cheap -- all three
+above were recomputations over data already collected -- and the failure mode it catches is not a
+wide interval but a confident wrong answer. This is the same lesson as the two principles above,
+one layer further out: the simulator principle governs what a validation run can see, the parser
+principle governs what a real run can see, and this one governs what an *aggregate over a
+heterogeneous suite* can see.
 
 ## MoE scale is reported on both axes, because they disagree
 
