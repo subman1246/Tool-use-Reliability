@@ -35,6 +35,8 @@ import pickle
 
 import numpy as np
 
+import argparse
+
 from tur.tasks.dag import generate_routing_suite
 from tur.harness.executor import FeedbackMode
 from tur.harness.runner import run_free, run_teacher_forced, MockBackend
@@ -49,6 +51,7 @@ PER_DEPTH = 200
 SEEDS = 2
 OUT_DIR = "data/results"
 RUN_TAG = "routingval"
+ARG_SHIFT = 0      # set by --arg-shift; 0 = copy-argument, non-zero = transformed
 
 
 class DepthVaryingMixPolicy(SimPolicy):
@@ -119,7 +122,8 @@ def run_policy(cfg: SimPolicyConfig, syn_trend, sel_trend) -> list[dict]:
                   if (syn_trend or sel_trend) else SimPolicy(c))
         backend = MockBackend(policy, model=cfg.name)
         suite = generate_routing_suite(DEPTHS, PER_DEPTH, distractor_level=1,
-                                       base_seed=seed * 31 + 1000)
+                                       base_seed=seed * 31 + 1000,
+                                       arg_shift=ARG_SHIFT)
         for task in suite:
             # see run_full_analysis for why the run mode must be signalled
             policy.stateless = False
@@ -151,6 +155,23 @@ def delta_1(records):
 
 
 def main():
+    global ARG_SHIFT, RUN_TAG
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arg-shift", type=int, default=0,
+                    help="run the validation on the TRANSFORMED-argument variant, "
+                         "where the required argument is (held + shift) mod M rather "
+                         "than a copy. Verifies that H4 is detectable there against "
+                         "known ground truth before any real-model budget is spent "
+                         "on it -- the copy variant could not test H4 at all, so the "
+                         "transform variant must be shown able to before it is used.")
+    ap.add_argument("--tag", default=None)
+    args = ap.parse_args()
+    ARG_SHIFT = args.arg_shift
+    if args.tag:
+        RUN_TAG = args.tag
+    elif ARG_SHIFT:
+        RUN_TAG = f"transformval{ARG_SHIFT}"
+    print(f"variant: routing, arg_shift={ARG_SHIFT}, tag={RUN_TAG}")
     os.makedirs(OUT_DIR, exist_ok=True)
     p_rows, f_rows, s_rows, t_rows, group, names = [], [], [], [], [], []
     L_ci, d1, per_depth, truth, filled_note = {}, {}, {}, {}, {}
