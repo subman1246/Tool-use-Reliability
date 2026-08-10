@@ -166,10 +166,33 @@ class RoutingTask:
     gold: list[Step]
     seed_value: int
     distractor_level: int
+    # When non-zero, the argument to send is a stated TRANSFORMATION of the value
+    # carried in, not a verbatim copy of it: ref = (carried + arg_shift) % MOD.
+    #
+    # This exists because H4 -- the claim that error composition shifts from
+    # selection-dominated to argument-dominated along a chain -- turned out to be
+    # untestable on the copy-argument variant. Measured on real models, 302 of 302
+    # clean-context errors were SELECTION errors and zero were argument errors:
+    # applying the routing rule is hard, transcribing a number that is written in
+    # the previous observation is not, so the argument channel was empty exactly
+    # where the composition is defined. A stated transformation makes an argument
+    # wrong-able independently of tool choice, which is the minimum needed for the
+    # hypothesis to have two categories to shift between.
+    arg_shift: int = 0
     tool_by_name: dict[str, ToolSpec] = field(default_factory=dict)
 
     def __post_init__(self):
         self.tool_by_name = {t.name: t for pair in self.branches for t in pair}
+
+    def arg_rule_text(self) -> str:
+        """Model-facing description of the argument transformation, if any."""
+        if not self.arg_shift:
+            return ""
+        return (f"IMPORTANT: the 'ref' you pass is NOT the previous result "
+                f"verbatim. At every step after the first, pass "
+                f"(previous result + {self.arg_shift}) mod {MOD}. "
+                f"The routing rule above is applied to the previous result "
+                f"itself, before that addition.")
 
     def schema_view(self) -> list[dict[str, Any]]:
         return [
@@ -188,7 +211,7 @@ class RoutingTask:
 
 
 def generate_routing_task(task_id: str, depth: int, distractor_level: int = 1,
-                          seed: int = 0) -> RoutingTask:
+                          seed: int = 0, arg_shift: int = 0) -> RoutingTask:
     """Build one routing task.
 
     `distractor_level` is accepted, recorded on the task, and DELIBERATELY not
@@ -220,21 +243,29 @@ def generate_routing_task(task_id: str, depth: int, distractor_level: int = 1,
     gold: list[Step] = []
     seed_value = rng.randint(1, MOD - 1)
     prev = seed_value
-    for even_t, odd_t in branches:
+    for i, (even_t, odd_t) in enumerate(branches):
+        # the branch is chosen on the value carried IN, before any transformation,
+        # so the rule the model is told stays a rule about the previous result
         chosen = even_t if prev % 2 == 0 else odd_t
-        args = {arg_name: prev}
+        # the first step has no "previous result", so the transformation applies
+        # only from step 1 onward -- otherwise the seed value stated in the prompt
+        # would itself have to be transformed, which the rule text does not say
+        ref = prev if (i == 0 or not arg_shift) else (prev + arg_shift) % MOD
+        args = {arg_name: ref}
         out = chosen.run(args)
         gold.append(Step(tool=chosen.name, args=args, output=out))
         prev = out
 
     task = RoutingTask(task_id=task_id, depth=depth, branches=branches, gold=gold,
-                       seed_value=seed_value, distractor_level=distractor_level)
+                       seed_value=seed_value, distractor_level=distractor_level,
+                       arg_shift=arg_shift)
     return task
 
 
 def generate_routing_suite(depths: list[int], per_depth: "int | dict[int, int]",
                            distractor_level: int = 1,
-                           base_seed: int = 0) -> list[RoutingTask]:
+                           base_seed: int = 0,
+                           arg_shift: int = 0) -> list[RoutingTask]:
     """As generate_suite, for the routing variant.
 
     task_id embeds base_seed. It did not, and the consequence was severe: every
@@ -263,5 +294,6 @@ def generate_routing_suite(depths: list[int], per_depth: "int | dict[int, int]",
         for k in range(n):
             seed = base_seed + 500000 + d * 100003 + k
             tasks.append(generate_routing_task(f"r{d}_{k}_s{base_seed}", d,
-                                               distractor_level, seed))
+                                               distractor_level, seed,
+                                               arg_shift=arg_shift))
     return tasks

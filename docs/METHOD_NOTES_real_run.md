@@ -222,6 +222,63 @@ Models are excluded from the hierarchical fit only if fewer than two depth bins
 reached three tasks, since a depth trend cannot be estimated from less. Exclusions
 are recorded in the metadata, and the raw rows are still written.
 
+## H4 needed a task-design change, not a bigger budget
+
+The first real run withdrew H4 — the claim that error composition shifts from
+selection-dominated early to argument-dominated later — and the reason is worth
+recording precisely, because it was not the reason we had prepared for.
+
+We had prepared for a power problem, and pre-committed to reporting H4 as a pooled
+suite-level claim with an automated withdrawal if the achieved per-step counts came
+in too thin. The counts were adequate: projected against measured per-model
+accuracies, the allocation yields four contiguous usable step bins, enough for a
+rank correlation to reach p < 0.05 at ρ = −1.
+
+What actually happened is that **one of H4's two categories does not occur**. Of
+302 clean-context errors across both small models, 302 were tool-selection errors
+and 0 were argument errors. On a routing task with copy-arguments there are only
+two ways to fail at a clean step: mis-apply the parity rule, or mis-transcribe the
+number. The first is genuinely hard. The second is copying a value that is written
+verbatim in the previous observation, and these models essentially never get it
+wrong while holding a correct value. So the ratio H4 is about is undefined at every
+step index — there is no mix, and therefore no shift in the mix to detect.
+
+Argument errors *do* occur in the data, but only in the wrong place: 145 of 289
+poisoned-context errors on `llama-3.1-8b-instant` name the gold tool while carrying
+a wrong value, because the routing rule applied to a corrupted value can
+coincidentally land on the right branch. Those are propagated errors, which the
+composition deliberately excludes as not being fresh evidence about what kind of
+error a model makes. The argument channel populates exactly where H4's measurement
+must not look.
+
+**The fix is `arg_shift`** (`config/default.yaml`), a transformed-argument variant
+in which the required argument is `(previous result + arg_shift) mod 100000` rather
+than a copy, stated in the prompt. That makes an argument wrong-able independently
+of tool choice, which is the minimum H4 needs.
+
+Two properties are asserted in `tests/test_transform_variant.py` rather than
+assumed, because both could fail silently:
+
+- **The variant is solvable.** A perfect policy scores $p_t = g_t = 1.000$ at every
+  depth, which is the check that the gold trajectory and the prompt agree. If they
+  disagreed the variant would look impossibly hard rather than merely harder, and
+  the resulting errors would be indistinguishable from genuine model failure.
+- **Clean contexts are still recognised as clean.** "Clean context" is a property of
+  the value carried *in*, not of the argument to be sent; those coincide only when
+  the argument is a copy. The harness previously compared the carried value against
+  the expected *argument*, which is equivalent under a copy and would have marked
+  every clean step as poisoned under a transform. That comparison is now against
+  the previous gold output in both run modes.
+
+`arg_shift` is left at 0 so the primary arm stays comparable with the data already
+collected. Running the variant is a fresh sweep: task ids and the cost model are
+unchanged, but the prompt differs, so the response cache misses everywhere.
+
+**What is not yet established:** that real models *do* produce argument errors under
+the transform. The simulated policy produces both channels by construction, so it
+verifies the task permits them, not that models exercise them. That is the open
+question the variant exists to answer and it needs API budget.
+
 ## MoE scale is reported on both axes, because they disagree
 
 Two models in the suite are sparse mixture-of-experts, and for them "parameter

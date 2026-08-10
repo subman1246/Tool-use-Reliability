@@ -29,6 +29,25 @@ def _gold_tool_for(task, step: int, ref: int) -> str:
     return task.gold[step].tool  # linear Task: fixed order
 
 
+def _expected_carry(task, step: int) -> int:
+    """The value a clean chain carries INTO this step: the previous gold output."""
+    return task.seed_value if step == 0 else task.gold[step - 1].output
+
+
+def _gold_arg_for(task, step: int, ref: int) -> int:
+    """The argument a correct call sends, given the value carried in.
+
+    Usually the carried value itself. On the transformed-argument variant it is a
+    stated function of it, so the policy must apply the same transformation the
+    prompt asks the model for -- otherwise a "correct" simulated action would score
+    as an argument error and the variant would look impossible rather than harder.
+    """
+    shift = getattr(task, "arg_shift", 0)
+    if not shift or step == 0:
+        return ref
+    return (ref + shift) % 100000
+
+
 def _alternative_tool(task, step: int, gold_tool: str, rng) -> str:
     """A DIFFERENT tool that actually exists in this task's schema.
 
@@ -121,7 +140,7 @@ class SimPolicy:
                 # Only clear the poisoned flag when the value it is about to
                 # send is in fact the expected one -- clearing unconditionally
                 # claimed a clean context while carrying a wrong value.
-                on_track = ref == task.gold[step].args.get("ref", ref)
+                on_track = ref == _expected_carry(task, step)
                 if on_track:
                     self._set_state(key, (False, None))
                 else:
@@ -129,7 +148,8 @@ class SimPolicy:
                     # produced a well-formed call carrying a wrong value, which
                     # is a semantic corruption from here on
                     self._set_state(key, (True, "semantic"))
-                return _gold_tool_for(task, step, ref), {"ref": ref}, True
+                return (_gold_tool_for(task, step, ref),
+                        {"ref": _gold_arg_for(task, step, ref)}, True)
             # still failing: keep sending a malformed call
             return _gold_tool_for(task, step, ref), {}, True
 
@@ -144,7 +164,7 @@ class SimPolicy:
         if poisoned:
             r = cfg.r_syn if origin == "syntax" else cfg.r_sem
             if rng.random() < r:
-                true_ref = task.gold[step].args.get("ref", ref)
+                true_ref = _expected_carry(task, step)
                 # Select the tool from the TRUE ref, not the corrupted one. On a
                 # RoutingTask the correct tool is a function of the value held,
                 # so recovering the value while still branching on the corrupted
@@ -157,10 +177,11 @@ class SimPolicy:
                 # were unaffected, their tool order being fixed.
                 recovered_tool = _gold_tool_for(task, step, true_ref)
                 self._set_state(key, (False, None))
-                return recovered_tool, {"ref": true_ref}, True
+                return (recovered_tool,
+                        {"ref": _gold_arg_for(task, step, true_ref)}, True)
 
         if rng.random() < eff_p:
-            args = {"ref": ref}
+            args = {"ref": _gold_arg_for(task, step, ref)}
             if not poisoned:
                 self._set_state(key, (False, None))
             else:
@@ -194,11 +215,12 @@ class SimPolicy:
                 # semantic rather than syntactic, and it carries the correct
                 # argument so that the selection and argument channels stay
                 # distinguishable in the logs.
-                return _alternative_tool(task, step, gold_tool, rng), \
-                       {"ref": ref}, True
+                return (_alternative_tool(task, step, gold_tool, rng),
+                        {"ref": _gold_arg_for(task, step, ref)}, True)
             # Argument error: right tool, wrong value.
             offset = rng.randint(1, 11)
-            return gold_tool, {"ref": ref + offset}, True
+            return (gold_tool,
+                    {"ref": _gold_arg_for(task, step, ref) + offset}, True)
 
 
 # a small suite spanning weak to strong, across two "families", mirroring the

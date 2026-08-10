@@ -9,6 +9,27 @@
 # Routing produced L_t = 0.500 on the same model at depth 4.
 task_variant: routing
 
+# Argument transformation. 0 = the argument is the previous result verbatim, which
+# is what the first real run used. Non-zero = the argument must be
+# (previous result + arg_shift) mod 100000, stated in the prompt.
+#
+# Why this exists: on the copy variant, real models produced 302 selection errors
+# and ZERO argument errors at clean-context steps. Applying the routing rule is
+# hard; transcribing a number written verbatim in the previous observation is not.
+# So H4 -- the claim that error composition shifts from selection-dominated to
+# argument-dominated along a chain -- had an empty category and was untestable, not
+# merely underpowered. A stated transformation makes an argument wrong-able
+# independently of tool choice, which is the minimum H4 needs to have two outcomes
+# to shift between.
+#
+# Left at 0 so the primary arm stays comparable with the data already collected.
+# Set it (7 is the tested value) to run the variant that can test H4; every task id
+# and the cost model are unchanged, but the response cache will miss because the
+# prompt differs, so budget it as a fresh sweep. tests/test_transform_variant.py
+# checks that a perfect policy still scores 1.000 -- i.e. that the variant is
+# harder rather than mis-built -- and that both error channels populate.
+arg_shift: 0
+
 # CONTROL ARM: the linear suite is kept, at low n and a reduced depth grid, as a
 # null control rather than dropped. Its expected result is L_t ~ 0, and reporting
 # that in line is the point: it shows the propagation signal in the primary arm

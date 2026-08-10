@@ -601,12 +601,20 @@ def _render_schema(tools: list[dict], style: str = "verbose") -> str:
 def _task_intro(task, schema_style: str = "verbose") -> str:
     schema = _render_schema(task.schema_view(), schema_style)
     if hasattr(task, "routing_rule_text"):  # RoutingTask
+        arg_rule = getattr(task, "arg_rule_text", lambda: "")()
+        if arg_rule:
+            # transformed-argument variant: the ref sent is a function of the
+            # previous result rather than a copy of it, so state that instead of
+            # the copy rule rather than in addition to it
+            ref_rule = arg_rule
+        else:
+            ref_rule = ("Each later step's ref equals the numeric result "
+                        "returned by the previous tool.")
         return (f"Tools available:\n{schema}\n\n"
                 f"Perform {task.depth} steps. At each step, choose the tool "
                 f"according to this rule, applied to the incoming ref value:\n"
                 f"{task.routing_rule_text()}\n\n"
-                f"The first step's ref={task.seed_value}. Each later step's ref "
-                f"equals the numeric result returned by the previous tool. "
+                f"The first step's ref={task.seed_value}. {ref_rule} "
                 f"Emit one JSON object per step: {{\"tool\": name, \"args\": {{\"ref\": value}}}}.")
     order = " -> ".join(s.tool for s in task.gold)
     return (f"Tools available:\n{schema}\n\n"
@@ -648,8 +656,15 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
     stalled = False   # a prior step exhausted retries without ever executing
     for t, gold in enumerate(task.gold):
         expected_ref = task.gold[t].args["ref"]
+        # "Clean context" is a property of the value CARRIED IN, which is the
+        # previous tool's gold output -- not of the argument the model is supposed
+        # to send. Those coincide only when the required argument is a verbatim
+        # copy of the previous result. On a task variant where the argument is a
+        # stated transformation of it, comparing the carried value against the
+        # expected ARGUMENT would mark every clean step as poisoned.
+        expected_carry = task.seed_value if t == 0 else task.gold[t - 1].output
         stalled_in = stalled
-        context_clean = (carried == expected_ref) and not stalled
+        context_clean = (carried == expected_carry) and not stalled
         attempts = 0
         recovered = False
         final_score = None
@@ -729,7 +744,10 @@ def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
                                                     "args": task.gold[j].args})})
             messages.append({"role": "user",
                              "content": f"result: {task.gold[j].output}"})
-        correct_ref = task.gold[t].args["ref"]
+        # The policy is handed the value CARRIED IN, matching run_free's `carried`,
+        # so a simulated policy sees the same kind of quantity in both run modes.
+        # Under a transformed-argument variant this is not the argument itself.
+        correct_ref = task.seed_value if t == 0 else task.gold[t - 1].output
         attempts = 0
         recovered = False
         final_score = None
