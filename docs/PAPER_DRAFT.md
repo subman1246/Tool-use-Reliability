@@ -822,7 +822,7 @@ distributed errors would give:
 | allam-2-7b | 2 | 78 | 0.641 | [0.542, 0.732] | 0.500 | 0.087 |
 | | 6 | 152 | 0.191 | [0.141, 0.249] | 0.167 | 0.728 |
 | llama-3.3-70b-versatile | 4 | 7 | 0.857 | **[0.488, 0.992]** | 0.250 | 0.000 |
-| | 6 | 11 | 0.273 | [0.088, 0.549] | 0.167 | +0.140 |
+| | 6 | 18 | 0.278 | [0.120, 0.492] | 0.167 | +0.172 |
 
 **The pattern is carried by `llama-3.1-8b-instant` and `allam-2-7b`**, on 49-320 errors per
 cell, where the terminal share sits consistently *above* the uniform expectation at every
@@ -836,10 +836,17 @@ Its depth-4 terminal share of 0.857 rests on 6 of 7 errors, with an 89% interval
 [0.488, 0.992] -- wide enough that it is compatible with anything from "somewhat above
 uniform" to "essentially all terminal". What it does show unambiguously is the consequence:
 with 6 of its 7 errors terminal, $L_4$ came out at exactly 0.000, which reads as a model
-immune to propagation. At depth 6 the same model gives $L_6 = +0.140$. An automated check
+immune to propagation. At depth 6 the same model gives $L_6 = +0.172$ with an 89% interval of
+[+0.049, +0.339], which excludes zero. An automated check
 flagged the $p_t = g_t$ identity, we classified it as benign on exactly this ground rather
-than as suite degeneracy, and the next bin confirmed it. Fourteen of its 59 tasks remain, and
-we report the updated interval when they land.
+than as suite degeneracy, and the next bin confirmed it.
+
+Two notes on the status of these two cells. The depth-4 row is **final**: that model's depth-4
+allocation is complete, so its 6-of-7 terminal share will not improve with further data, which
+is a further reason the general claim is carried by the two high-$n$ models rather than by this
+one. The depth-6 row has since gained tasks and the estimate moved from +0.140 [+0.000, +0.362]
+to +0.172 [+0.049, +0.339] -- inside the earlier interval, so confirmatory rather than a
+revision, and now separated from zero.
 
 **Consequences for anyone measuring propagation.** The reported loss is a lower bound whose
 shortfall depends on a model-specific quantity, so cross-model comparisons of $L_t$ at a
@@ -1172,10 +1179,47 @@ carried value rather than a verbatim copy, or multi-argument calls where one fie
 can be wrong while the tool is right. That is a task-design change, not a budget
 change, and we state it as the concrete prerequisite rather than as future work.
 
-*The per-step aggregation machinery, and the finding that per-depth pooling
-recovers only 26% of a configured composition span where per-step resolution
-recovers 75%, are retained from the validation run (§4) and remain the right way
-to test H4 on a task family where both categories occur.*
+*The per-step aggregation machinery, and the finding that per-depth pooling recovers only
+26% of a configured composition span where per-step resolution recovers 75%, are retained
+from the validation run (§4) and remain the right way to test H4 on a task family where both
+categories occur.*
+
+**Why H4 is reported pooled, on evidence rather than on an appeal to power.** A policy
+configured with a **flat** selection share (`flat-strong` in the validation suite) returned a
+per-step composition trend of $\rho = -0.738$ at $p = 0.037$ -- a significant trend where the
+ground truth has none. That is a directly observed false positive on a known null. The
+conventional inference from thin cells is "power is low, so pool", and this supports something
+stronger and less comfortable: a test that manufactures a significant trend on a control at
+these counts is **unreliable in both directions**, so a per-model *non*-significant result at
+comparable $n$ cannot be read as evidence of a true null either. The noise that invented a
+trend here can equally mask one elsewhere. We therefore report the **pooled suite-level trend
+as the primary claim**, give per-model $\rho$ as **directional evidence only**, and interpret no
+single per-model result in isolation -- not because the cells are small, but because we watched
+the per-model test return a wrong answer on a case whose truth we knew.
+
+**What the transform-variant validation licenses, stated precisely.** We ran the same
+four-policy ground-truth suite on the transformed-argument variant before spending any budget
+on it. It recovers the configured trend there ($\rho = -0.976$, $p < 0.0001$, flat control
+$\rho = +0.048$, $p = 0.91$), so the estimator is sound under either variant. But its output is
+**identical to the copy variant's, digit for digit**, because the simulated policy chooses
+selection-versus-argument from a configured share and the transformation changes only which
+number an offset is added to. The simulator is therefore blind to the very difference the
+transform condition exists to test.
+
+Consequently this paper does **not** claim that H4 detectability was validated on the
+transform variant and the effect then confirmed on real models -- that phrasing would have the
+validation lending support it cannot lend. The two statements are separate: the estimator
+recovers a configured composition trend under either variant *in principle*; and whether real
+models produce argument errors when arguments require arithmetic rather than copying is
+established by the real run **alone**. We state this explicitly because the distinction is
+easy to elide.
+
+This is the §4.4 principle recurring -- a simulator validates the channels it exercises and
+silently certifies the ones it does not -- with one difference worth recording: it was caught
+**before** the budget was spent, because the check was instrumented rather than assumed to
+clear. All eight earlier instances were found in data already collected. A validation whose
+verdict could have stopped the condition paid for itself here even though the verdict was
+"proceed".
 
 ### 5.7 Function-calling mode ablation
 

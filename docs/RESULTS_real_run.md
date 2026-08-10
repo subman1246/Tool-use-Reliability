@@ -149,15 +149,21 @@ to propagate to. It has now landed, and it separates them.
 | model | depth | $p_t$ | $g_t$ | $L_t$ | 89% CI | $n_g$ | fresh errors |
 |---|---|---|---|---|---|---|---|
 | llama-3.3-70b-versatile | 4 | 0.865 | 0.865 | +0.000 | [+0.000, +0.000] | 52 | 6 |
-| | **6** | 0.896 | 0.771 | **+0.140** | [+0.000, +0.362] | 48 | 3 |
+| | **6** | 0.879 | 0.727 | **+0.172** | **[+0.049, +0.339]** | 66 | 5 |
 | gpt-oss-120b | 4 | 0.991 | 0.964 | +0.027 | [+0.000, +0.083] | 112 | 1 |
 | | **6** | 0.991 | 0.947 | **+0.044** | [+0.000, +0.135] | 114 | 1 |
 | qwen3.6-27b | 4 | 1.000 | 1.000 | +0.000 | [+0.000, +0.000] | 112 | 0 |
 | | **6** | 1.000 | 1.000 | **+0.000** | [+0.000, +0.000] | 66 | 0 |
 
-**`llama-3.3-70b-versatile` leaves the ceiling.** Its $L_t$ moves from exactly 0.000 at
-depth 4 to +0.140 at depth 6 -- the first propagation loss measured in a large model
-here. This is the outcome the anomaly detector's "benign" classification predicted: at
+**`llama-3.3-70b-versatile` leaves the ceiling, and its interval now excludes zero.** Its
+$L_t$ moves from exactly 0.000 at depth 4 to **+0.172 [+0.049, +0.339]** at depth 6 -- the
+first propagation loss *established* in a large model here, rather than merely suggested.
+
+This is an update to an earlier reading, and it went the way the earlier reading allowed.
+With 8 depth-6 tasks the estimate was +0.140 [+0.000, +0.362], reported as suggestive because
+the lower bound touched zero. Three further tasks ($n_g$ 48 to 66) moved it to +0.172 with a
+lower bound of +0.049. The new point estimate lies **inside** the previously reported
+interval, so this is confirmatory rather than a revision -- the interval did its job. This is the outcome the anomaly detector's "benign" classification predicted: at
 depth 4 every one of its errors fell on the final step of the chain, where nothing
 downstream exists to poison, so propagation was impossible by construction rather than
 absent. Depth 6 gave those errors somewhere to go. The interval's lower bound is still

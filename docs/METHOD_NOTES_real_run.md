@@ -284,38 +284,71 @@ the transform. The simulated policy produces both channels by construction, so i
 verifies the task permits them, not that models exercise them. That is the open
 question the variant exists to answer and it needs API budget.
 
-## The simulated validation cannot judge the transform variant, and proving that was the point
+## What the transform validation does and does not license
 
 Before committing 1.5 days of token budget to the transformed-argument condition, we ran
 the same four-policy ground-truth validation on it that was used for the copy variant
-(`validate_routing.py --arg-shift 7`). Two results, and the second is the more useful.
+(`validate_routing.py --arg-shift 7`). The result needs stating precisely, because the
+natural summary of it is wrong in a way a reader could easily accept.
 
-**The estimator works on the transform variant.** The configured falling selection share
-is recovered at rho = -0.976, p < 0.0001, and the flat-mix control shows no trend
-(rho = +0.048, p = 0.91). So nothing about the transformed argument breaks the per-step
-composition machinery.
+**What it establishes.** The per-step composition estimator recovers a configured
+selection-share trend on the transformed-argument variant: falling-sel at rho = -0.976,
+p < 0.0001, with the flat-mix control showing no trend (rho = +0.048, p = 0.91). Nothing
+about transforming the argument breaks the machinery.
 
-**But the validation is identical to the copy variant's, digit for digit** -- 301 selection
-and 480 argument errors on flat-mix in both, the same rho and p throughout. That is not a
-coincidence and not a bug: the simulated policy decides selection-versus-argument from a
-configured `selection_share`, then emits either a wrong tool or the right tool with an
-offset value. Applying the argument transformation changes *which number* the offset is
-added to and nothing about the decision, and the RNG stream is identical, so the outcomes
-match exactly.
+**What it does not establish.** The validation output is **identical to the copy variant's,
+digit for digit** -- 301 selection and 480 argument errors on flat-mix in both, the same rho
+and p throughout. That is not a coincidence and not a defect. The simulated policy chooses
+selection-versus-argument from a configured `selection_share`, then emits either a wrong
+tool or the right tool with an offset value. Applying the argument transformation changes
+*which number* the offset is added to and nothing about the decision, and the RNG stream is
+identical, so the outcomes match exactly.
 
-The consequence is worth stating plainly, because it is the ninth artifact's pattern
-appearing prospectively rather than in hindsight: **the simulator is blind to the very
-difference the transform condition exists to test.** It can confirm the estimator recovers
-a trend that is put there by configuration; it cannot say whether a *real* model produces
-argument errors when arguments require arithmetic rather than copying. That question is
-answerable only by the real run, and the identity of these two tables is the proof that no
-amount of simulated validation substitutes for it.
+So the simulator is blind to the precise difference the transform condition exists to test.
+It cannot distinguish "arguments are copied" from "arguments require arithmetic", because in
+the simulator neither affects whether an argument error occurs.
 
-One incidental finding worth recording: `flat-strong`, a flat control, returns
-rho = -0.738 at p = 0.037 -- a spurious significant trend. At these per-policy error counts
-the per-model trend test has a non-negligible false-positive rate, which is independent
-support for reporting H4 pooled at suite level with per-model rho as directional evidence
-only, rather than testing each model separately.
+**The consequence for how the real transform numbers may be described.** The paper must not
+say, in any form, "we validated H4 detectability on the transform variant and then confirmed
+the effect on real models". That phrasing implies the validation lends support to the real
+result, and it does not. The correct two-part statement is:
+
+1. the estimator recovers a configured composition trend under either variant, in principle;
+   and
+2. **whether real models produce argument errors when arguments require arithmetic rather
+   than copying is established by the real run alone, independently of any validation.**
+
+The distinction is subtle enough that a reviewer might over-credit step 1, so it is stated
+here rather than left implicit.
+
+**Why this is the ninth artifact's pattern, and why it is cheaper this time.** A simulator
+validates the channels it exercises and silently certifies the ones it does not; here the
+uncertified channel is whether the *task* makes argument errors reachable for a real model.
+The difference from the previous eight instances is timing: this one was found **before**
+spending budget, because the check was instrumented rather than assumed to clear. Every
+earlier instance was found after the fact, in data already collected. That is the concrete
+payoff of running a validation whose result could have stopped the condition, and it is worth
+saying plainly: the practice of verifying a variant can detect what it is meant to detect
+paid for itself here even though the verdict was "proceed".
+
+## Per-model composition tests are unreliable in BOTH directions at these counts
+
+`flat-strong`, a policy configured with a **flat** selection share, returned rho = -0.738 at
+**p = 0.037** on its per-step composition trend -- a significant trend where the ground truth
+has none. A directly observed false positive.
+
+The usual reading of a result like this is "power is low, so pool". That is weaker than what
+the observation supports. A test that produces a wrong significant answer on a known null at
+these counts is not merely underpowered; it is **unreliable in both directions**. A
+per-model *non*-significant result at comparable n therefore cannot be trusted as evidence
+of a true null either, since the same noise that manufactured a trend here can mask one
+elsewhere.
+
+Hence the reporting rule for H4, with its empirical basis rather than an appeal to power:
+the **pooled suite-level trend is the primary claim**, per-model rho values are reported as
+**directional evidence only**, and no single per-model result is interpreted in isolation --
+because we directly observed the per-model test return a wrong answer on a control whose
+truth we knew.
 
 ## MoE scale is reported on both axes, because they disagree
 
