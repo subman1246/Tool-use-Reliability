@@ -1,0 +1,77 @@
+# SECOND CONDITION: transformed-argument routing, run to make H4 testable.
+#
+# Run as:
+#   py scripts/run_real_suite.py --config config/transform_h4.yaml --tag transform
+#   py scripts/report_real.py --tag transform
+#
+# WHY A SECOND CONDITION RATHER THAN A REPLACEMENT
+#
+# The primary arm (config/default.yaml) uses arg_shift: 0 -- the argument is the
+# previous result copied verbatim. On that variant, real models produced 302
+# clean-context errors of which 302 were tool-selection errors and 0 were argument
+# errors, because applying the routing rule is hard while transcribing a number
+# written verbatim in the previous observation is not. H4 -- the claim that error
+# composition shifts from selection-dominated to argument-dominated along a chain --
+# therefore had an empty category and was untestable, not merely underpowered.
+#
+# The obvious response is to switch the primary arm to a non-zero shift. Costing it
+# showed that is unnecessary, which is the whole reason this is a separate config:
+#
+#   finish the copy condition, depths 1-6      1.6 days
+#   copy condition depth 8 as well            +2.9 days
+#   this transform condition, depths [1,2,4]  +1.5 days
+#   ---------------------------------------------------
+#   both conditions, complete                  6.0 days   (7 remain in the window)
+#
+# So nothing collected is invalidated and nothing is abandoned. The copy condition
+# keeps its 33%-spent prefix and is finished; this condition is added alongside it.
+# Running both is also better science than running either: the pair DEMONSTRATES the
+# task-design claim (copy -> argument channel empty; transform -> both channels
+# populated) rather than asserting it from one condition plus an argument.
+#
+# WHY DEPTHS [1, 2, 4] AND NOT THE FULL GRID
+#
+# H4 is resolved by STEP INDEX. Depths up to 4 populate step indices 0-3, which is
+# exactly 4 contiguous bins -- the minimum for a Spearman trend to reach p < 0.05 at
+# rho = -1. Cost is roughly quadratic in depth, so the depth-8 bin alone costs about
+# twice this entire condition. Buying step indices 4-7 would cost more than the rest
+# of the study and is not needed for the hypothesis. The propagation results (L_t by
+# depth) come from the primary arm, which does run the full grid.
+task_variant: routing
+
+# (previous result + 7) mod 100000, stated in the prompt. 7 is the value asserted in
+# tests/test_transform_variant.py, which checks that a perfect policy still scores
+# p_t = g_t = 1.000 at every depth -- i.e. that the variant is harder rather than
+# mis-built -- and that an erring policy populates both error channels.
+arg_shift: 7
+
+depths: [1, 2, 4]
+per_depth: {1: 60, 2: 60, 4: 65}
+
+# No control arm. The linear null is a property of the task structure rather than of
+# the argument regime, and it is already established in the primary arm; spending
+# this condition's budget on it again would buy nothing.
+control_arm: null
+
+budget_days: 2
+
+distractor_level: 1
+seeds: 1
+feedback: structured
+call_mode: uniform
+max_retries: 1
+
+# All six models, same nested unequal-n scheme and same measured TPD values as the
+# primary arm. gpt-oss-20b is included: its absence from the primary arm's early
+# data was pilot drawdown, not a smaller cap.
+models:
+  - {name: "groq/llama-3.1-8b-instant",    family: "llama",   scale: 8,   provider: "groq", rpd: 14400, tpm: 6000,  tpd: 500000}
+  - {name: "groq/llama-3.3-70b-versatile", family: "llama",   scale: 70,  provider: "groq", rpd: 1000,  tpm: 12000, tpd: 100000}
+  - {name: "groq/openai/gpt-oss-20b",      family: "gpt-oss", scale: 20,  active_scale: 3.6, provider: "groq", rpd: 1000, tpm: 8000, tpd: 200000}
+  - {name: "groq/openai/gpt-oss-120b",     family: "gpt-oss", scale: 120, active_scale: 5.1, provider: "groq", rpd: 1000, tpm: 8000, tpd: 200000}
+  - {name: "groq/qwen/qwen3.6-27b",        family: "qwen",    scale: 27,  provider: "groq", rpd: 1000,  tpm: 8000, tpd: 200000}
+  - {name: "groq/allam-2-7b",              family: "allam",   scale: 7,   provider: "groq", rpd: 7000,  tpm: 6000,  tpd: 500000}
+
+paths:
+  results: data/results
+  cache: data/cache
