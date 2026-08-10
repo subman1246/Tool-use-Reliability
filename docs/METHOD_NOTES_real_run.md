@@ -321,7 +321,10 @@ result, and it does not. The correct two-part statement is:
 The distinction is subtle enough that a reviewer might over-credit step 1, so it is stated
 here rather than left implicit.
 
-**Why this is the ninth artifact's pattern, and why it is cheaper this time.** A simulator
+**Why this is the ninth artifact's pattern, and why it is cheaper this time.** Of the nine
+instances, **eight were found after the fact, in data already collected. This is the first
+found before spending budget** -- and only because the check was instrumented and its verdict
+allowed to stop the condition, rather than being assumed to clear. A simulator
 validates the channels it exercises and silently certifies the ones it does not; here the
 uncertified channel is whether the *task* makes argument errors reachable for a real model.
 The difference from the previous eight instances is timing: this one was found **before**
@@ -349,6 +352,66 @@ the **pooled suite-level trend is the primary claim**, per-model rho values are 
 **directional evidence only**, and no single per-model result is interpreted in isolation --
 because we directly observed the per-model test return a wrong answer on a control whose
 truth we knew.
+
+## gpt-oss-20b is a day behind, not broken (checked, because it looked broken)
+
+At one point `gpt-oss-20b` sat at 1 of 128 tasks while every other model was past 75% of
+target. That is the shape of a structural problem, so it was checked rather than waited out.
+It is not one, and the evidence is worth recording because "one model is far behind" is a
+situation any replicator will hit.
+
+- **Same daily allowance as its tier peers.** Three independent 429 bodies report
+  `Limit 200000` for it, identical to `qwen3.6-27b` and `gpt-oss-120b`.
+- **No unusual failure or retry behaviour.** Zero backend failures, zero unexpected 429s,
+  `n_attempts = 1` throughout.
+- **Its responses are the *shortest* in the suite**, median 44 characters against ~49 for the
+  llama and allam models, so it is not paying a hidden output-token cost.
+- **Its progress rate is normal.** Over one 5-hour driver window it gained 4 tasks while
+  `qwen3.6-27b` gained 5 and `gpt-oss-120b` gained 6. Comparable in absolute terms.
+
+The explanation is the pilot drawdown recorded earlier: pilot runs consumed 199,895 of its
+200,000 daily tokens before the real sweep began, so it earned nothing on day one while its
+peers banked 70-90 tasks each before capping. It is exactly one day's quota behind and
+closing at the same rate as everyone else. Nothing to fix; it simply finishes last.
+
+The general point for replication: **a pilot spends the same allowance as the real run.** On
+a tier where the daily token budget is the binding constraint, piloting a model costs a day
+of that model's real data, and it is invisible in wall-clock terms because the pilot itself
+takes minutes.
+
+## The only model that never errs is the only model that reasons before answering
+
+Response lengths are not uniform across the suite, and the outlier is informative. Median
+characters of returned text per model, measured over cached completions:
+
+| Model | median | mean | p90 | max |
+|---|---|---|---|---|
+| `allam-2-7b` | 49 | 50 | 53 | 57 |
+| `llama-3.1-8b-instant` | 49 | 50 | 60 | 69 |
+| `llama-3.3-70b-versatile` | 49 | 52 | 55 | 132 |
+| `openai/gpt-oss-120b` | 48 | 53 | 63 | 341 |
+| `openai/gpt-oss-20b` | 44 | 44 | 47 | 50 |
+| **`qwen/qwen3.6-27b`** | **571** | **851** | **1,724** | **3,800** |
+
+Five models emit essentially the bare JSON call. `qwen3.6-27b` emits 10-17x more text, and
+inspecting it shows why: it produces an explicit `<think>` block that computes the parity,
+restates the rule, checks its own arithmetic, and sometimes second-guesses whether to emit one
+step or all of them, before emitting the call.
+
+This is the same model that scores $p_t = g_t = 1.000$ at every depth reached, with **zero
+errors across 584 invocations**, and whose severity is therefore undefined. So the one model
+that never errs is also the one model that derives the routing rule explicitly instead of
+pattern-matching it. With a single model this is an association and not a causal claim, and we
+state it as such -- but it is the most plausible available explanation for the ceiling, and it
+is a concrete prediction for anyone extending this work: reasoning before the call should
+reduce fresh selection errors, which is the dominant error channel here.
+
+**It also came close to inverting a headline.** All 584 of qwen's records show
+`executed = True`, `n_attempts = 1` and `error_type = none`: not one parse failure. That is
+entirely due to the `<think>`-stripping parser and last-balanced-JSON extraction added during
+Phase 4 hardening. Without it, every one of those responses would have failed to parse, and
+the suite's most reliable model would have been recorded as its least reliable -- a harness
+detail deciding the sign of a headline result rather than its precision.
 
 ## MoE scale is reported on both axes, because they disagree
 
