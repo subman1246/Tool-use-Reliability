@@ -27,20 +27,26 @@ and a propagation component. On the 7–8B models the split is stark: the
 teacher-forced baseline declines gently with depth (0.700 → 0.549) while the
 free-running rate collapses (0.700 → 0.167), so that by depth 6 roughly **70% of a
 model's own clean-context capability is lost to its own earlier mistakes**
-(net propagation loss $L_t$ = 0.696 and 0.700, 89% CI widths under 0.20). We
-also observe **no recovery at all**:
-$P(\text{next call correct} \mid \text{current call wrong})$ is 0.000, and 0 of 284
-poisoned steps return to an on-track trajectory. We argue this should be read as a
-property of the *measurement*, not of the models. Returning to on-track under
-exact-match scoring means emitting exactly the gold argument, which after divergence
-is information the model has never received and cannot derive, so a model that
-self-corrects often and one that never does produce identical data. The recovery
-parameters are therefore **not identified** rather than measured as zero, the
-three-state model reduces to its absorbing case as a consequence of the scoring
-regime, and — since the simulated policies "recovered" only by reading gold values
-out of band — the recovery channel was never estimable from observable data in any
-version of this study. That names the cause of a non-identifiability we had
-previously only documented.
+(net propagation loss $L_t$ = 0.696 and 0.700, 89% CI widths under 0.20).
+
+Our main result, however, is about the measurement rather than the models. **Under
+exact-match scoring against a fixed gold trajectory, both parameters of any such
+propagation model are determined by the scoring rule rather than by the data.**
+Severity is forced to its boundary — 0 of 650 poisoned-context steps were correct, so
+$\pi = 1$ exactly — and recovery is structurally unobservable: 0 of 284 poisoned steps
+returned to an on-track trajectory, against an expected 0.0028 coincidental returns.
+Both follow from one mechanism: a diverged chain holds a value that is not the gold
+one, and the gold value is the output of a tool whose constants the model never sees,
+so it is information the model has never received and cannot derive. A model that
+self-corrects often and one that never does produce identical observable data.
+Substituting the two forced values leaves $g_t = c_t p_t$ with **no free parameters**,
+so the parametric layer is not merely non-identifiable here but an identity in the
+measured per-step rates — and the fit, run anyway, returns 0.93 and 0.73 for a
+quantity that is exactly 1.000. This applies to any benchmark scoring calls against a
+fixed gold trajectory, so any work fitting a self-correction or recovery parameter
+under such scoring is reporting a pinned parameter. We give the mechanism, the
+arithmetic, and a concrete scoring change — credit a call that correctly continues
+from the value the model actually holds — that would make both quantities estimable.
 
 Two negative results are reported rather than omitted. A hypothesised shift in
 error composition along the chain is **untestable on this task family**, not for
@@ -93,14 +99,24 @@ longer context alone.
   origin-specific recovery rates, together with a fit-free propagation-loss
   metric that remains informative when the parametric model is not fully
   identifiable.
-3. An empirical demonstration — first on a fully-controlled simulated suite
-  with known ground truth, then on real models **[PENDING REAL DATA]** —
+3. **A negative result about a scoring regime, not about a model family:** under
+  exact-match scoring against a fixed gold trajectory, both the severity and the
+  recovery parameters of any such propagation model are determined by the scoring
+  rule rather than by the data. Severity is forced to its boundary and recovery is
+  structurally unobservable, for one shared reason — once a chain diverges, the
+  gold value is information the model has never received and cannot derive. This
+  applies to any benchmark that scores calls against a fixed gold trajectory, so
+  any work fitting a self-correction or recovery parameter under exact-match
+  scoring is reporting a pinned parameter. We give the mechanism, the arithmetic,
+  and a concrete scoring change that would make both quantities estimable.
+4. An empirical demonstration — first on a fully-controlled simulated suite
+  with known ground truth, then on real models —
   showing where the parametric model succeeds, where it is structurally
   limited by exact-match scoring, and which metric to trust in each regime.
-4. A released, tested pipeline (task generation, harness, scoring,
-  aggregation, Bayesian fitting, and figure generation) intended to make this
-  kind of evaluation reproducible and extensible to new models and
-  benchmarks.
+5. A released, tested pipeline (task generation, harness, scoring,
+  aggregation, Bayesian fitting, and figure generation), together with the
+  measured provider rate limits that constrain replication and are published
+  nowhere else.
 
 ---
 
@@ -524,13 +540,42 @@ transitions. It does not establish that the prompt-construction and
 observation-passing path is correct**, and no simulation with an out-of-band
 state interface can establish that.
 
-**A simulator validates the channels it exercises, and silently certifies the
-ones it does not.** We state this as a design principle rather than as a list of
-incidents, because it is the transferable contribution of this section and it is
-predictive: it says in advance where to look. Nine defects were found in this
-pipeline, and every one of them is an instance of it — a channel the real
-interface has, which the simulator bypassed, and which therefore reported healthy
-no matter what it did:
+**A simulator validates the channels it exercises, and silently certifies the ones
+it does not.** This is the transferable contribution of the section, and we state it
+as a principle rather than as a list of incidents because it is *predictive*: it says
+in advance where to look, namely at every channel the real interface has that the
+mock supplies some other way.
+
+The nine defects below are one finding, not nine. Each is the same failure: a channel
+the real interface has, which the simulator bypassed, and which therefore reported
+healthy no matter what it did. What makes the pattern worth stating as a principle,
+rather than as a lesson about being careful, is that **the last two are not coding
+errors at all**:
+
+- Comparing the value carried *in* against the expected *argument* is **correct** on
+  a copy-argument task, where the two are equal by construction. It becomes wrong only
+  on a task that can distinguish them. The copy variant was not hiding a bug; it was
+  masking a *definitional* error, and it took building a task with transformed
+  arguments to expose it. Had we shipped that task without re-deriving the definition,
+  every clean step would have been marked poisoned and $L_t$ would have been
+  meaningless -- with no test failing.
+- The simulator's recovery mechanism did **exactly what it was configured to do**. It
+  recovered at the configured rate, and the log-based estimator correctly recovered
+  that rate. But it recovered by reading the gold output directly, and no real model
+  has that access. So the recovery parameter was never estimable from observable data
+  in any version of this study, and the measured-transition priors of §4.3 were
+  derived from transitions only a simulator can produce.
+
+Correct code, correct configuration, invalid measurement. That is why the principle
+has to be applied by asking what each channel *is*, rather than by looking for
+mistakes.
+
+We also record how long this took to see. **This pipeline documented the same
+non-identifiability across three successive reworkings -- adding measured-transition
+priors, then per-step resolution, then paired resampling -- each time treating it as a
+statistical property of the fit, before identifying that the scoring regime had
+determined both parameters in advance (§5.4).** The diagnostic was in the output every
+time; the question was not.
 
 | Bypassed channel | What the simulator did instead | What it certified falsely |
 |---|---|---|
@@ -683,7 +728,126 @@ because a positive $\Delta_1$ was pre-registered as the model-free confirmation 
 propagation and it delivers that; we do not treat its magnitude as an independent
 severity measure, because on this task family it is not one.
 
-### 5.4 Severity and recovery
+### 5.4 The scoring regime, not the models, fixes both parametric quantities
+
+This is the paper's central negative result, and it is a statement about a class of
+measurement rather than about the models we happened to measure.
+
+**Severity is forced to its boundary.** $\pi$ is defined so that correctness under a
+poisoned context is $(1-\pi)p_t$, which makes $\pi = 1 - P(\text{correct} \mid
+\text{poisoned})$ — a directly observable conditional rate needing no fit at all.
+Measured across all five models with data: **0 of 650 poisoned-context steps were
+correct**, so $\pi = 1.000$ exactly.
+
+**Recovery is structurally unobservable.** $P(\text{next correct} \mid \text{this
+wrong}) = 0.000$, and 0 of 284 poisoned steps with a successor returned to an
+on-track context.
+
+**Both follow from one mechanism.** A poisoned step holds a value that is not the
+gold one. Scoring the call correct requires emitting exactly the gold argument, and
+the gold value at step $t$ is the output of a tool whose constants are never exposed
+to the model. After divergence that value is information the model has never
+received and cannot derive: the only route to it is coincidence, at $pprox
+1/100{,}000$ per opportunity. Over the 284 recovery opportunities the expected number
+of coincidental returns is **0.0028**. So a model that self-corrects 20% of the time
+and one that never self-corrects produce *identical observable data*, and likewise a
+model that partially survives poisoning is indistinguishable from one that never
+does. Severity is pinned at 1 and recovery is unidentified for the same reason.
+
+**What that does to the parametric layer.** Substituting $\pi = 1$ and
+$r_{\text{syn}} = r_{\text{sem}} = 0$ into the recurrence of §3.2 leaves
+
+$$g_t = c_t \, p_t, \qquad c_t = \prod_{j<t} p_j, \qquad L_t = x_t = 1 - c_t$$
+
+with **no free parameters at all**. The state model is not merely non-identifiable
+here; it is an identity in the measured per-step rates, and $L_t$ reduces to "the
+probability the chain has already erred". The three-parameter fit is therefore
+redundant on this data — and worse, it is *misleading*: it reports posterior means of
+0.93 and 0.73 for a quantity that is exactly 1.000, because it fits a smooth
+recurrence to depth-pooled aggregates under a prior centred at 0.5. We report the
+directly measured values as primary and the posteriors only to show the discrepancy.
+
+**Scope of the claim.** Nothing above depends on which models were run, on the task
+family, or on the specific numbers. It depends only on scoring calls against a fixed
+gold trajectory whose values the model cannot reconstruct — which is what
+execution-match and AST-match benchmarks do. Any study fitting a severity,
+self-correction or recovery parameter under such scoring is reporting a parameter
+that its scoring rule has already determined. We did not notice this for three
+successive reworkings of this pipeline, each of which documented the resulting
+non-identifiability without naming its cause (§4.3, §4.4).
+
+### 5.4a A concrete fix, implemented and tested on the same data
+
+The remedy is a scoring change, and it is small enough to specify precisely, cheap
+enough to implement, and — because the response cache holds every raw completion — we
+can apply it retrospectively to the data already collected and report what it does.
+
+**Operationally:** credit a call when it *correctly continues from the value the model
+actually holds*, rather than when it matches the gold trajectory. A step that carries a
+wrong value forward but applies the right tool and the right argument rule to it counts
+as correct-given-state; a step that mis-applies the rule counts as wrong, whether or
+not its input was already corrupted.
+
+**Half of this already existed.** Routing tasks were already scored on both
+`selection_matches_gold` (did it name the tool the gold trajectory names) and
+`selection_correct` (did it name the tool that is correct *given the ref it holds*).
+That second predicate is exactly conditional-on-state scoring, and it is why selection
+errors stayed measurable after divergence while argument errors did not. We added the
+argument-side counterpart, `args_correct_given_state`, asking whether the argument
+equals the required function of the held value — a verbatim copy on the copy variant,
+$(\text{held} + k) mod M$ on the transformed variant — and `correct_given_state`
+requiring both.
+
+**Applied to the collected data (0 API calls, 881 cache hits), it un-pins severity.**
+
+| | $P(\text{ok} \mid \text{clean})$ | $P(\text{ok} \mid \text{poisoned})$ | $\pi$ |
+|---|---|---|---|
+| gold-agreement, llama-3.1-8b | 0.658 | **0.000** | **1.000** (boundary) |
+| conditional, llama-3.1-8b, step 1 | 0.554 | 0.727 | −0.312 |
+| conditional, llama-3.1-8b, step 2 | 0.500 | 0.462 | +0.077 |
+| gold-agreement, allam-2-7b | 0.476 | **0.000** | **1.000** (boundary) |
+| conditional, allam-2-7b, step 1 | 0.338 | 0.316 | +0.066 |
+
+Clean-context steps score identically under both rules (0.658 vs 0.658), as they must —
+a clean step's held value *is* the gold value — which is the correctness check on the
+implementation.
+
+**And the result is substantive, not merely technical: $\pi pprox 0$, not $pprox
+1$.** Under conditional scoring, holding a wrong value barely changes a model's ability
+to continue correctly from it. One point estimate is even negative, i.e. poisoned steps
+did marginally *better* than clean ones; with 33–57 poisoned steps per cell these are
+noisy, and the transform condition is sized to sharpen them. But the sign and magnitude
+are consistent across both models and both step indices.
+
+That licenses a decomposition the gold-agreement metric destroys:
+
+> **Propagation in these chains is an information-loss phenomenon, not a
+> competence-degradation one.** Carrying a wrong value does not make a model worse at
+> the local task — it makes the gold trajectory unreachable. Gold-agreement scoring
+> reports $\pi = 1$ (once off-trajectory, never back on it); conditional scoring
+> reports $\pi pprox 0$ (being off-trajectory does not impair the model). Both are
+> true, and they answer different questions.
+
+A sharper version of the same point: among poisoned steps, `args_correct_given_state`
+is **1.000** — these models *always* transcribe the value they hold correctly. Every
+conditional failure is tool selection. The state model's premise, that poisoning
+degrades capability, is not what happens here; what happens is that correctness is
+defined against a trajectory the model can no longer reach.
+
+**What it costs, stated plainly.** There is no longer a single right answer per call:
+scoring must reconstruct what the model held at each step and evaluate a predicate
+against it, which is more implementation and more room for disagreement about the
+predicate. Cross-system comparison gets looser, because two systems can both be
+self-consistent while doing different things, and a high correct-invocation rate no
+longer implies end-task success — a perfectly self-consistent agent working from a
+wrong value still fails the task. Exact-match scoring buys comparability at the price
+of making severity and recovery unmeasurable; conditional scoring makes the opposite
+trade. **Reporting both is the defensible option**, which is why we retain
+gold-agreement as the headline and argue the conditional variant is required for any
+claim about severity or recovery.
+
+
+### 5.5 Severity and recovery: the fitted posteriors
 
 **Recovery is not observable under exact-match scoring, and that is a scoping
 statement about the method rather than a finding about the models.**
@@ -748,7 +912,7 @@ healthy throughout (max R-hat 1.0019, min ESS 4,044, zero divergences), which sa
 the posterior was explored properly and says nothing about whether the data
 constrained it.
 
-### 5.5 Error-type composition along the chain (H4): withdrawn
+### 5.6 Error-type composition along the chain (H4): withdrawn
 
 **H4 is untestable on this task family, and the reason is more informative than a
 power limitation.** Of 302 clean-context errors, **302 are tool-selection errors
@@ -787,7 +951,7 @@ recovers only 26% of a configured composition span where per-step resolution
 recovers 75%, are retained from the validation run (§4) and remain the right way
 to test H4 on a task family where both categories occur.*
 
-### 5.6 Function-calling mode ablation
+### 5.7 Function-calling mode ablation
 
 *Native vs. uniform calling mode on a fixed subset, quantifying how much of
 the argument-error rate is a calling-mode artifact rather than a genuine
@@ -802,7 +966,7 @@ dropping it would cost that axis entirely. Its absence from the calling-mode
 comparison means the ablation's five models span the two scale-within-family
 axes but not the smallest scale point.
 
-### 5.7 Simulated vs. real: three divergences, real primary
+### 5.8 Simulated vs. real: three divergences, real primary
 
 The pre-registered rule makes real data primary on disagreement and treats the
 divergence itself as the object of analysis. There are three, and they are

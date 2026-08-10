@@ -560,6 +560,12 @@ class StepRecord:
     recovered: bool
     stalled_in: bool = False         # entered this step on a stalled chain
     backend_error: bool = False      # the provider call itself failed, not the model
+    # Conditional-on-state scoring, recorded alongside gold-agreement rather than
+    # instead of it. Gold-agreement pins severity at 1 and hides recovery, because
+    # after divergence the gold value is unreachable; these two ask whether the call
+    # correctly continued from the value the agent actually held.
+    args_correct_given_state: bool = False
+    correct_given_state: bool = False
 
 
 # --------------------------- prompt ---------------------------
@@ -596,6 +602,20 @@ def _render_schema(tools: list[dict], style: str = "verbose") -> str:
     if style != "verbose":
         raise ValueError(f"unknown schema style {style!r}")
     return json.dumps(tools, indent=0)
+
+
+def _expected_args_given_held(task, step: int, held: int) -> dict:
+    """What a correct call sends GIVEN the value the agent actually holds.
+
+    On the copy-argument variant this is the held value itself; on the
+    transformed-argument variant it is the stated function of it. Used for
+    conditional-on-state scoring, which is what lets severity and recovery take
+    interior values instead of being pinned by gold-agreement scoring.
+    """
+    shift = getattr(task, "arg_shift", 0)
+    if not shift or step == 0:
+        return {"ref": held}
+    return {"ref": (held + shift) % 100000}
 
 
 def _task_intro(task, schema_style: str = "verbose") -> str:
@@ -677,8 +697,10 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
             resp = backend.complete(messages, task.schema_view(), call_mode)
             call = parse_response(resp, call_mode)
             ex = execute(task, call.tool or "", call.args or {}, feedback)
-            score = score_step(call, gold, ex.schema_valid, ex.known_tool,
-                               expected_tool=_expected_tool_given_ref(task, t, carried))
+            score = score_step(
+                call, gold, ex.schema_valid, ex.known_tool,
+                expected_tool=_expected_tool_given_ref(task, t, carried),
+                expected_args=_expected_args_given_held(task, t, carried))
             final_score = score
             # Echo the model's own turn back into the history. Without this the
             # conversation carries no record of what was called or what came
@@ -713,6 +735,8 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
             final_score.args_correct_strict,
             final_score.args_correct_soft, final_score.error_type.value,
             attempts, executed, context_clean, recovered, stalled_in=stalled_in,
+            args_correct_given_state=final_score.args_correct_given_state,
+            correct_given_state=final_score.correct_given_state,
             backend_error=bool(call and call.is_backend_error)))
     return records
 
@@ -761,8 +785,10 @@ def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
             call = parse_response(resp, call_mode)
             final_call = call
             ex = execute(task, call.tool or "", call.args or {}, feedback)
-            score = score_step(call, gold, ex.schema_valid, ex.known_tool,
-                               expected_tool=_expected_tool_given_ref(task, t, correct_ref))
+            score = score_step(
+                call, gold, ex.schema_valid, ex.known_tool,
+                expected_tool=_expected_tool_given_ref(task, t, correct_ref),
+                expected_args=_expected_args_given_held(task, t, correct_ref))
             final_score = score
             if ex.ok:
                 executed = True
@@ -777,7 +803,9 @@ def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
             final_score.args_correct_strict,
             final_score.args_correct_soft, final_score.error_type.value,
             attempts, executed, True, recovered, stalled_in=False,
-            backend_error=bool(final_call and final_call.is_backend_error)))
+            backend_error=bool(final_call and final_call.is_backend_error),
+            args_correct_given_state=final_score.args_correct_given_state,
+            correct_given_state=final_score.correct_given_state))
     return records
 
 
