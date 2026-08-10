@@ -32,9 +32,11 @@ model's own clean-context capability is lost to its own earlier mistakes**
 Our main result, however, is about the measurement rather than the models. **Under
 exact-match scoring against a fixed gold trajectory, both parameters of any such
 propagation model are determined by the scoring rule rather than by the data.**
-Severity is forced to its boundary — 0 of 650 poisoned-context steps were correct, so
-$\pi = 1$ exactly — and recovery is structurally unobservable: 0 of 284 poisoned steps
-returned to an on-track trajectory, against an expected 0.0028 coincidental returns.
+Severity is forced to its boundary -- 0 of 683 poisoned-context steps were correct, in
+every one of the four models that produced any (the fifth never left a clean context,
+leaving its $\pi$ undefined rather than 1) -- and recovery is structurally unobservable:
+0 of 284 poisoned steps returned to an on-track trajectory, against an expected 0.0028
+coincidental returns.
 Both follow from one mechanism: a diverged chain holds a value that is not the gold
 one, and the gold value is the output of a tool whose constants the model never sees,
 so it is information the model has never received and cannot derive. A model that
@@ -45,8 +47,12 @@ measured per-step rates — and the fit, run anyway, returns 0.93 and 0.73 for a
 quantity that is exactly 1.000. This applies to any benchmark scoring calls against a
 fixed gold trajectory, so any work fitting a self-correction or recovery parameter
 under such scoring is reporting a pinned parameter. We give the mechanism, the
-arithmetic, and a concrete scoring change — credit a call that correctly continues
-from the value the model actually holds — that would make both quantities estimable.
+arithmetic, and a concrete scoring change -- credit a call that correctly continues
+from the value the model actually holds -- which we implement and apply retrospectively
+to the collected data at zero API cost, un-pinning severity to interior estimates of
++0.149 [+0.021, +0.268] and +0.316 [+0.066, +0.503]. Because it re-scores cached
+completions, any group holding raw completions can apply it without re-running a
+single call.
 
 Two negative results are reported rather than omitted. A hypothesised shift in
 error composition along the chain is **untestable on this task family**, not for
@@ -734,10 +740,27 @@ This is the paper's central negative result, and it is a statement about a class
 measurement rather than about the models we happened to measure.
 
 **Severity is forced to its boundary.** $\pi$ is defined so that correctness under a
-poisoned context is $(1-\pi)p_t$, which makes $\pi = 1 - P(\text{correct} \mid
-\text{poisoned})$ — a directly observable conditional rate needing no fit at all.
-Measured across all five models with data: **0 of 650 poisoned-context steps were
-correct**, so $\pi = 1.000$ exactly.
+poisoned context is $(1-\pi)p_t$, making $\pi$ a ratio of two directly observable
+conditional rates that needs no fit at all. Measured: **0 of 683 poisoned-context steps
+were correct**, so $\pi = 1.000$.
+
+Pooled zero and per-model zero are different claims, so we state both. Every model that
+produced any poisoned step has **exactly zero** poisoned-context successes:
+
+| model | poisoned steps | successes | 95% upper bound on the rate |
+|---|---|---|---|
+| llama-3.1-8b-instant | 397 | 0 | 0.0075 |
+| allam-2-7b | 269 | 0 | 0.0111 |
+| llama-3.3-70b-versatile | 9 | 0 | 0.283 |
+| gpt-oss-120b | 8 | 0 | 0.312 |
+| qwen3.6-27b | 0 | -- | $\pi$ **undefined** |
+
+The honest form is therefore: $\pi = 1.000$ in **all four models that can be measured at
+all**, with tight bounds on the two supplying most of the evidence and weak bounds on
+the two ceiling-level models. `qwen3.6-27b` never left a clean context, so its $\pi$ is
+undefined rather than 1. What carries the claim beyond these four is not the sample
+size but the mechanism below, which implies the result for any model under this scoring
+rule.
 
 **Recovery is structurally unobservable.** $P(\text{next correct} \mid \text{this
 wrong}) = 0.000$, and 0 of 284 poisoned steps with a successor returned to an
@@ -776,75 +799,115 @@ that its scoring rule has already determined. We did not notice this for three
 successive reworkings of this pipeline, each of which documented the resulting
 non-identifiability without naming its cause (§4.3, §4.4).
 
-### 5.4a A concrete fix, implemented and tested on the same data
+### 5.4a A concrete fix: implemented, tested, and applicable retrospectively
 
-The remedy is a scoring change, and it is small enough to specify precisely, cheap
-enough to implement, and — because the response cache holds every raw completion — we
-can apply it retrospectively to the data already collected and report what it does.
+The remedy is a scoring change. It is small enough to specify precisely, cheap enough
+to implement, and -- because the response cache holds every raw completion -- we can
+apply it to data already collected and report what it does. **That last property is
+what makes it adoptable:** any group with cached completions can re-score without
+re-running a single API call. Ours cost 0 calls and 881 cache hits.
 
 **Operationally:** credit a call when it *correctly continues from the value the model
-actually holds*, rather than when it matches the gold trajectory. A step that carries a
-wrong value forward but applies the right tool and the right argument rule to it counts
-as correct-given-state; a step that mis-applies the rule counts as wrong, whether or
-not its input was already corrupted.
+actually holds*, rather than when it matches the gold trajectory. A step carrying a
+wrong value forward, which applies the right tool and the right argument rule to that
+value, counts as correct-given-state; a step that mis-applies the rule counts as wrong
+whether or not its input was already corrupted.
 
-**Half of this already existed.** Routing tasks were already scored on both
-`selection_matches_gold` (did it name the tool the gold trajectory names) and
-`selection_correct` (did it name the tool that is correct *given the ref it holds*).
-That second predicate is exactly conditional-on-state scoring, and it is why selection
-errors stayed measurable after divergence while argument errors did not. We added the
-argument-side counterpart, `args_correct_given_state`, asking whether the argument
-equals the required function of the held value — a verbatim copy on the copy variant,
-$(\text{held} + k) mod M$ on the transformed variant — and `correct_given_state`
-requiring both.
+**Half of it already existed.** Routing tasks were already scored on both
+`selection_matches_gold` (did it name the tool gold names) and `selection_correct`
+(did it name the tool correct *given the ref it holds*). The second is exactly
+conditional-on-state scoring, and it is why selection errors stayed measurable after
+divergence while argument errors did not. We added the argument-side counterpart,
+`args_correct_given_state` -- does the argument equal the required function of the held
+value, a verbatim copy on the copy variant and $(\text{held} + k) \bmod M$ on the
+transformed one -- and `correct_given_state` requiring both.
 
-**Applied to the collected data (0 API calls, 881 cache hits), it un-pins severity.**
+**It un-pins severity.** Estimates below are pooled across steps, **stratified by the
+parity of the held value** (see the confound in §5.4b) and bootstrapped over tasks:
 
-| | $P(\text{ok} \mid \text{clean})$ | $P(\text{ok} \mid \text{poisoned})$ | $\pi$ |
+| model | gold-agreement $\pi$ | conditional $\pi$, parity-stratified | 89% CI |
 |---|---|---|---|
-| gold-agreement, llama-3.1-8b | 0.658 | **0.000** | **1.000** (boundary) |
-| conditional, llama-3.1-8b, step 1 | 0.554 | 0.727 | −0.312 |
-| conditional, llama-3.1-8b, step 2 | 0.500 | 0.462 | +0.077 |
-| gold-agreement, allam-2-7b | 0.476 | **0.000** | **1.000** (boundary) |
-| conditional, allam-2-7b, step 1 | 0.338 | 0.316 | +0.066 |
+| llama-3.1-8b-instant | **1.000** (boundary) | **+0.149** | [+0.021, +0.268] |
+| allam-2-7b | **1.000** (boundary) | **+0.316** | [+0.066, +0.503] |
 
-Clean-context steps score identically under both rules (0.658 vs 0.658), as they must —
-a clean step's held value *is* the gold value — which is the correctness check on the
-implementation.
+Clean-context steps score identically under both rules (0.658 vs 0.658), as they must
+-- a clean step's held value *is* the gold value -- which is the correctness check on
+the implementation.
 
-**And the result is substantive, not merely technical: $\pi pprox 0$, not $pprox
-1$.** Under conditional scoring, holding a wrong value barely changes a model's ability
-to continue correctly from it. One point estimate is even negative, i.e. poisoned steps
-did marginally *better* than clean ones; with 33–57 poisoned steps per cell these are
-noisy, and the transform condition is sized to sharpen them. But the sign and magnitude
-are consistent across both models and both step indices.
+**What this licenses, and what it does not.** Severity moves from a boundary artifact
+to an interior estimate whose interval excludes zero. So the strong reading -- that
+propagation here is *purely* information loss with no competence cost -- is **not
+supported**: holding a wrong value does measurably degrade rule application. The
+supported reading is quantitative rather than categorical:
 
-That licenses a decomposition the gold-agreement metric destroys:
+> Most of the measured propagation loss is **information loss** rather than competence
+> degradation. Gold-agreement scoring attributes all of it to severity ($\pi = 1$);
+> conditional scoring attributes 0.15--0.32 of it to genuine degradation and the
+> remainder to the gold trajectory having become unreachable. Both quantities are
+> real; only the second is a property of the model.
 
-> **Propagation in these chains is an information-loss phenomenon, not a
-> competence-degradation one.** Carrying a wrong value does not make a model worse at
-> the local task — it makes the gold trajectory unreachable. Gold-agreement scoring
-> reports $\pi = 1$ (once off-trajectory, never back on it); conditional scoring
-> reports $\pi pprox 0$ (being off-trajectory does not impair the model). Both are
-> true, and they answer different questions.
-
-A sharper version of the same point: among poisoned steps, `args_correct_given_state`
-is **1.000** — these models *always* transcribe the value they hold correctly. Every
-conditional failure is tool selection. The state model's premise, that poisoning
-degrades capability, is not what happens here; what happens is that correctness is
-defined against a trajectory the model can no longer reach.
+We flag this as a hypothesis the data supports rather than an established result, for
+two reasons. The intervals are wide and rest on 269--397 poisoned steps per model with
+only two models contributing. And the *scope* is narrow in a way that matters: on the
+copy variant, a correct argument means transcribing an integer the model was shown one
+turn earlier. That a model reliably copies a visible number is a weak competence test,
+so `args_correct_given_state` = 1.000 among poisoned steps -- these models never
+mis-transcribe -- may not survive a task where argument construction is harder. **The
+transformed-argument condition (§5.6) is therefore a test of this decomposition's
+generality, not only an H4 fix:** there the argument requires arithmetic on the held
+value rather than a copy, so the argument channel can fail on competence grounds. If
+the decomposition holds there, it is promoted; if not, it stays suggestive with its
+limits visible.
 
 **What it costs, stated plainly.** There is no longer a single right answer per call:
 scoring must reconstruct what the model held at each step and evaluate a predicate
-against it, which is more implementation and more room for disagreement about the
-predicate. Cross-system comparison gets looser, because two systems can both be
-self-consistent while doing different things, and a high correct-invocation rate no
-longer implies end-task success — a perfectly self-consistent agent working from a
-wrong value still fails the task. Exact-match scoring buys comparability at the price
-of making severity and recovery unmeasurable; conditional scoring makes the opposite
-trade. **Reporting both is the defensible option**, which is why we retain
-gold-agreement as the headline and argue the conditional variant is required for any
-claim about severity or recovery.
+against it, which is more implementation and more room to disagree about the predicate.
+Cross-system comparison gets looser, since two systems can both be self-consistent
+while doing different things. And a high correct-invocation rate stops implying
+end-task success -- a perfectly self-consistent agent working from a wrong value still
+fails the task. Exact-match scoring buys comparability at the price of making severity
+and recovery unmeasurable; conditional scoring makes the opposite trade. **Reporting
+both is the defensible option**, which is why we keep gold-agreement as the headline
+and argue the conditional variant is required for any claim about severity or recovery.
+
+### 5.4b Why one severity estimate came out negative: a branch-choice bias
+
+Estimated per step rather than pooled, one conditional $\pi$ was **negative**
+(-0.312 at step 1 for `llama-3.1-8b-instant`: poisoned steps scored 0.727 against
+0.554 for clean). Rather than attribute that to small cells, we looked for a mechanism,
+and there is one.
+
+**Rule application depends strongly on the parity of the held value, and the direction
+differs by model:**
+
+| model | accuracy when held ref is even | when odd |
+|---|---|---|
+| llama-3.1-8b-instant | 0.525 (n=219) | **0.742** (n=221) |
+| allam-2-7b | **0.647** (n=221) | 0.169 (n=219) |
+
+The cause is a position bias toward the first-listed branch. The rule text lists the
+even branch first, and measuring the choice directly:
+
+| model | picks first-listed tool, ref even | ref odd | discrimination |
+|---|---|---|---|
+| llama-3.1-8b-instant | 0.525 | 0.258 | **+0.267** |
+| allam-2-7b | 0.827 | 0.786 | **+0.041** |
+
+`allam-2-7b` picks the first-listed tool about 80% of the time **almost regardless of
+the value it is conditioning on**. Its discrimination between the two cases is 0.041 --
+it is not following the routing rule at all, and its apparent competence when the ref
+happens to be even is an artifact of the bias coinciding with the answer.
+`llama-3.1-8b-instant` does discriminate (+0.267), weakly but genuinely.
+
+Two consequences. First, this is a **confound for any clean-versus-poisoned
+comparison**, because the two subsets need not have the same parity composition -- at
+step 2 the clean subset was 69% even-held against 41% for the poisoned subset. All
+conditional $\pi$ estimates in §5.4a are therefore parity-stratified; the negative
+per-step value does not survive stratification and pooling, and the resulting intervals
+exclude zero. Second, it is a finding in its own right about *how* rule application
+fails: not as noise around a correct rule, but as a **default that ignores the
+conditioning variable**. An aggregate correct-invocation rate hides this completely --
+`allam-2-7b` scores 0.647 on half the cases while performing no conditioning at all.
 
 
 ### 5.5 Severity and recovery: the fitted posteriors
@@ -1003,6 +1066,54 @@ parameter regime did not.
 ---
 
 ## 6. Discussion
+
+### 6.1 What to do instead: the diagnosis generalises and the fix is cheap
+
+The central result of this paper is a diagnosis with a remedy, and the two belong
+together. Separating them would leave either a complaint or an unmotivated proposal.
+
+**The diagnosis generalises.** Any evaluation that scores a call against a fixed gold
+trajectory, and whose environment does not hand the model the gold intermediate values,
+forces the same two conclusions: a severity parameter pinned at its boundary and a
+recovery parameter that no amount of data can identify. The argument needs no appeal to
+our tasks or our models. Once a chain diverges, being scored correct requires producing
+a value the model has never received and cannot derive; the probability of doing so by
+chance is one over the value space. This covers execution-match and AST-match
+benchmarks as they are ordinarily built. **Any work reporting a fitted self-correction,
+recovery, or severity parameter under such scoring is reporting a number its scoring
+rule determined in advance** -- and, as §4.4 records, we made exactly that mistake
+across three successive reworkings of this pipeline before seeing it.
+
+**The fix is small, and it is retrospective.** Score a call against the state the model
+actually holds rather than the state it should have held. Concretely, that is one extra
+predicate per channel: for tool choice, "is this the tool the rule selects given the
+value held" -- which many routing-style evaluations already compute -- and for
+arguments, "is this the argument the rule requires of the value held". Both are
+functions of information the harness already has, because it knows what it fed the
+model.
+
+The property that makes this adoptable rather than aspirational is that **it applies to
+data already collected.** Scoring is a pure function of the recorded completion and the
+recorded state, so any group holding raw completions can re-score without issuing a
+single new API call. We did exactly that: adding the predicate and re-scoring our
+existing cache cost 0 calls and 881 cache hits, and moved severity from a pinned 1.000
+to +0.149 [+0.021, +0.268] and +0.316 [+0.066, +0.503]. Nothing was re-run.
+
+**And it changes what the numbers mean, not just their values.** Under gold-agreement,
+all propagation loss is attributed to severity. Under conditional scoring, most of it
+turns out to be the gold trajectory becoming unreachable, with a smaller and separately
+estimable competence effect. Those are different quantities with different remedies: an
+agent that degrades under corruption needs better robustness, while an agent that
+merely cannot get back onto a trajectory needs a way to detect inconsistency and
+restart. Exact-match scoring cannot tell them apart, and reports the union as severity.
+
+**Our recommendation is to report both.** Gold-agreement remains the right headline: it
+is comparable across systems and it answers the operational question of whether the
+task was done. Conditional scoring is a *requirement*, not an enhancement, for any claim
+about severity, recovery, or self-correction. The cost of the second is real -- there is
+no single right answer per call, cross-system comparison loosens, and a high
+correct-invocation rate no longer implies end-task success -- which is precisely why it
+should sit alongside the first rather than replace it.
 
 **[PENDING REAL DATA for model-specific claims; the framing below is ready.]**
 

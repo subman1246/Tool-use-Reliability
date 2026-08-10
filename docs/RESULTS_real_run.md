@@ -256,7 +256,7 @@ number it has never seen.
 
 The honest statement is therefore:
 
-> $r_{	ext{syn}}$ and $r_{	ext{sem}}$ are **not identified** under exact-match
+> $r_{\text{syn}}$ and $r_{\text{sem}}$ are **not identified** under exact-match
 > scoring on this task family. They are not measured as zero -- they are
 > unmeasurable, and the state model reduces to its absorbing special case as a
 > consequence of the scoring regime, not as a finding about model behaviour.
@@ -293,6 +293,92 @@ prerequisite for the recovery half of the state model to be estimable at all. It
 recorded here because every version of this pipeline has reported
 non-identifiability without naming its cause.
 
+
+### 4.1a Severity is pinned by the same mechanism, and the fix un-pins it
+
+$\pi$ is defined by $P(\text{ok} \mid \text{poisoned}) = (1-\pi) P(\text{ok} \mid \text{clean})$, so
+it is a ratio of two directly observable rates and needs no fit. Measured: **0 of 683
+poisoned-context steps correct**, hence $\pi = 1.000$.
+
+Per-model, because pooled zero and per-model zero are different claims:
+
+| model | poisoned steps | successes | 95% upper bound |
+|---|---|---|---|
+| llama-3.1-8b-instant | 397 | 0 | 0.0075 |
+| allam-2-7b | 269 | 0 | 0.0111 |
+| llama-3.3-70b-versatile | 9 | 0 | 0.283 |
+| gpt-oss-120b | 8 | 0 | 0.312 |
+| qwen3.6-27b | 0 | -- | **undefined** |
+
+$\pi = 1.000$ in all four models that can be measured; `qwen3.6-27b` never left a clean
+context so its $\pi$ is undefined, not 1. And this is *forced* by the same mechanism as
+the recovery result: a poisoned step holds a wrong value, so the gold argument is
+exactly as unreachable as a recovery would be.
+
+With $\pi = 1$ and $r = 0$ substituted, the recurrence leaves $g_t = c_t p_t$,
+$c_t = \prod_{j<t} p_j$, and $L_t = x_t$ -- **no free parameters**. The state model is an
+identity in the measured per-step rates, and the fitted posteriors (0.93, 0.73) are not
+merely redundant but wrong about a quantity that is exactly 1.
+
+**Conditional-on-state scoring un-pins it.** Scoring the argument and the tool against
+what the *held* value requires, rather than against gold, and re-scoring the existing
+cache (0 API calls, 881 cache hits):
+
+| model | gold-agreement $\pi$ | conditional $\pi$ (parity-stratified) | 89% CI |
+|---|---|---|---|
+| llama-3.1-8b-instant | 1.000 (boundary) | **+0.149** | [+0.021, +0.268] |
+| allam-2-7b | 1.000 (boundary) | **+0.316** | [+0.066, +0.503] |
+
+Clean-context steps score identically under both rules, which is the implementation
+check. Both intervals exclude zero, so poisoning *does* degrade rule application -- the
+strong claim that propagation here is purely information loss is **not supported**. The
+supported claim is quantitative: gold-agreement attributes all propagation loss to
+severity, conditional scoring attributes 0.15-0.32 of it to genuine degradation and the
+rest to the gold trajectory being unreachable.
+
+Treat this as a hypothesis the data supports, not a settled result. Two models, wide
+intervals, and a narrow scope: on the copy variant a correct argument means transcribing
+an integer shown one turn earlier, which is a weak competence test, so the observed
+`args_correct_given_state` = 1.000 among poisoned steps may not survive harder argument
+construction. **That is why the transformed-argument condition tests this decomposition's
+generality and not only H4** -- there the argument requires arithmetic on the held value,
+so the argument channel can fail on competence grounds.
+
+### 4.1b A branch-choice bias, and why one severity estimate came out negative
+
+Estimated per step rather than pooled, one conditional $\pi$ came out at **-0.312**
+(step 1, `llama-3.1-8b-instant`: poisoned 0.727 against clean 0.554). Instead of
+assuming small-sample noise we looked for a mechanism, and found one.
+
+Rule application depends strongly on the parity of the held value, in opposite
+directions for the two models:
+
+| model | accuracy, held ref even | held ref odd |
+|---|---|---|
+| llama-3.1-8b-instant | 0.525 (n=219) | **0.742** (n=221) |
+| allam-2-7b | **0.647** (n=221) | 0.169 (n=219) |
+
+The cause is a bias toward the first-listed branch (the rule text lists the even branch
+first). Measuring the choice itself:
+
+| model | picks first-listed, ref even | ref odd | discrimination |
+|---|---|---|---|
+| llama-3.1-8b-instant | 0.525 | 0.258 | **+0.267** |
+| allam-2-7b | 0.827 | 0.786 | **+0.041** |
+
+`allam-2-7b` picks the first-listed tool ~80% of the time almost regardless of the value
+it is supposed to be conditioning on. Its discrimination is 0.041: **it is not following
+the routing rule at all**, and its apparent competence when the ref happens to be even
+is the bias coinciding with the answer. `llama-3.1-8b-instant` does discriminate
+(+0.267), weakly but genuinely.
+
+Two consequences. This is a **confound** for clean-versus-poisoned comparisons whenever
+the two subsets differ in parity composition -- at step 2 the clean subset was 69%
+even-held against 41% poisoned -- so every conditional $\pi$ above is parity-stratified
+and task-bootstrapped; the negative value does not survive that and the intervals
+exclude zero. And it is a finding in its own right about *how* rule application fails:
+not as noise around a correct rule but as a **default that ignores the conditioning
+variable**, which an aggregate correct-invocation rate hides entirely.
 
 ### 4.2 Zero syntactic errors, verified rather than assumed
 
