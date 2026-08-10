@@ -39,18 +39,26 @@ PRICE_PER_1M = {
     "default_proprietary": (1.00, 3.00),
 }
 
-# Measured from provider response headers on 2026-08-09 (x-ratelimit-limit-*),
-# not taken from documentation -- the docs quote an org-wide 14,400 req/day for
-# Groq, but the enforced limit is per model and is 1,000/day for most of them.
-# {model: (requests_per_day, tokens_per_minute)}; None = unknown/unpublished.
+# {model: (requests_per_day, tokens_per_minute, tokens_per_day)}.
+#
+# RPD/TPM measured from x-ratelimit-limit-* response headers on 2026-08-09, not
+# taken from documentation -- the docs quote an org-wide 14,400 req/day for Groq,
+# but the enforced limit is per model and is 1,000/day for most of them.
+#
+# TPD is measured from the BODY of the 429 that enforces it, on 2026-08-10. It
+# appears in no response header: every model returns "-" for
+# x-ratelimit-limit-tokens-per-day, so there is no way to discover it except by
+# being refused. It is also NOT uniform across the suite -- llama-3.3-70b gets
+# half what the others get -- so it cannot be inferred from one observation.
+# TPD is the binding constraint for this workload by a wide margin.
 RATE_LIMITS = {
-    "groq/llama-3.1-8b-instant":    (14400, 6000),
-    "groq/llama-3.3-70b-versatile": (1000, 12000),
-    "groq/qwen/qwen3.6-27b":        (1000, 8000),
-    "groq/openai/gpt-oss-20b":      (1000, 8000),
-    "groq/openai/gpt-oss-120b":     (1000, 8000),
-    "groq/allam-2-7b":              (7000, 6000),
-    "gemini/gemini-2.5-flash":      (None, None),
+    "groq/llama-3.1-8b-instant":    (14400, 6000, None),
+    "groq/llama-3.3-70b-versatile": (1000, 12000, 100_000),
+    "groq/qwen/qwen3.6-27b":        (1000, 8000, 200_000),
+    "groq/openai/gpt-oss-20b":      (1000, 8000, 200_000),
+    "groq/openai/gpt-oss-120b":     (1000, 8000, 200_000),
+    "groq/allam-2-7b":              (7000, 6000, None),
+    "gemini/gemini-2.5-flash":      (None, None, None),
 }
 
 _OUTPUT_TOKENS_PER_CALL = 40   # one short JSON call
@@ -181,53 +189,73 @@ def estimate(depths, per_depth, seeds, max_retries, models, distractor_level=1,
     print()
 
     # ---- rate-limit feasibility: the actual constraint ----
-    print("RATE-LIMIT FEASIBILITY (limits measured from response headers)")
-    print(f"  pacing at {headroom:.0%} of each TPM ceiling, spread over {days} day(s)")
+    # TPD is checked FIRST and reported as the headline, because it is the
+    # constraint that decides whether the run is possible and it is the one this
+    # script used to omit entirely. RPD and TPM both looked comfortable while the
+    # sweep was in fact an 18-day run: 2.9M tokens per model against a daily
+    # token allowance of 100,000-200,000. TPD appears in no response header, so
+    # the figures below come from the body of the 429 that enforces them.
+    print("RATE-LIMIT FEASIBILITY (TPD from 429 bodies; RPD/TPM from headers)")
+    print(f"  pacing at {headroom:.0%} of each ceiling, target {days} day(s)")
     print()
-    print(f"{'model':<34}{'RPD':>7}{'req/day':>9}{'days':>6}{'TPM':>7}{'hours':>7}  verdict")
-    print("-" * 88)
-    infeasible, warnings = [], []
+    print(f"{'model':<32}{'TPD':>9}{'tok/day':>10}{'DAYS':>6}"
+          f"{'RPD':>7}{'TPM':>7}{'hours':>7}  binding")
+    print("-" * 92)
+    infeasible, warnings, day_needs = [], [], []
     for m in models:
         name = m["name"] if isinstance(m, dict) else m
-        rpd, tpm = RATE_LIMITS.get(name, (None, None))
+        limits = RATE_LIMITS.get(name)
         per_day_calls = s["calls_min"] / days
-        if rpd is None:
-            print(f"{name:<34}{'?':>7}{per_day_calls:>9,.0f}{'?':>6}{'?':>7}{'?':>7}"
-                  f"  UNKNOWN LIMITS -- verify before running")
+        per_day_tokens = total_tokens / days
+        if not limits or limits[0] is None:
+            print(f"{name:<32}{'?':>9}{per_day_tokens:>10,.0f}{'?':>6}{'?':>7}"
+                  f"{'?':>7}{'?':>7}  UNKNOWN -- verify before running")
             warnings.append(name)
             continue
-        days_needed = s["calls_min"] / rpd
+        rpd, tpm = limits[0], limits[1]
+        tpd = limits[2] if len(limits) > 2 else None
+
+        days_rpd = s["calls_min"] / rpd
         hours = total_tokens / (tpm * headroom) / 60
-        ok_rpd = per_day_calls <= rpd
-        ok_worst = (s["calls_worst"] / days) <= rpd
-        if not ok_rpd:
-            verdict, bad = "EXCEEDS RPD", True
-        elif not ok_worst:
-            verdict, bad = "ok, but worst-case retries exceed RPD", False
-            warnings.append(name)
+        if tpd:
+            days_tpd = total_tokens / (tpd * headroom)
+            days_needed = max(days_rpd, days_tpd)
+            binding = "TPD" if days_tpd >= days_rpd else "RPD"
+            tpd_txt = f"{tpd:,}"
         else:
-            verdict, bad = "ok", False
-        if bad:
-            infeasible.append(name)
-        print(f"{name:<34}{rpd:>7,}{per_day_calls:>9,.0f}{days_needed:>6.1f}"
-              f"{tpm:>7,}{hours:>7.1f}  {verdict}")
-    print("-" * 88)
+            days_tpd, days_needed, binding = 0.0, days_rpd, "RPD (TPD unmeasured)"
+            tpd_txt = "?"
+            warnings.append(name)
+        day_needs.append((name, days_needed))
+        if days_needed > days:
+            infeasible.append((name, days_needed))
+            binding += f" -> needs {days_needed:.1f}d"
+        print(f"{name:<32}{tpd_txt:>9}{per_day_tokens:>10,.0f}"
+              f"{days_needed:>6.1f}{rpd:>7,}{tpm:>7,}{hours:>7.1f}  {binding}")
+    print("-" * 92)
     print()
     if infeasible:
-        print(f"!! {len(infeasible)} model(s) exceed their daily request cap: "
-              f"{infeasible}")
-        print("   Reduce per_depth, reduce seeds, or raise --days.")
+        worst = max(d for _, d in infeasible)
+        print(f"!! {len(infeasible)} model(s) cannot finish in {days} day(s).")
+        for name, d in sorted(infeasible, key=lambda x: -x[1]):
+            print(f"     {name:<34} needs {d:.1f} days")
+        print(f"   Models are swept CONCURRENTLY and caps are per model, so")
+        print(f"   calendar time is the slowest model: ~{worst:.1f} days, not the sum.")
+        print("   Options: cut per_depth, shorten the depth grid (cost is")
+        print("   superlinear in depth -- the deepest bin dominates), raise")
+        print("   --days, or move off the free tier.")
     if warnings:
-        print(f"!  worst-case retry volume or unknown limits for: {warnings}")
-        print("   Retries only fire on syntactic failures, so the realistic")
-        print("   volume sits between the two figures; the pacer + stop-on-cap")
-        print("   in run_real_suite.py is what keeps this safe.")
+        print(f"!  unmeasured TPD or worst-case retry volume for: {warnings}")
+        print("   An unmeasured TPD is NOT an absent one. Every model in this")
+        print("   suite has one and none of them publish it in a header, so a")
+        print("   '?' here means the estimate below is a lower bound on days.")
     if not infeasible and not warnings:
         print("All models fit inside their measured caps at this configuration.")
     print()
-    print("Wall-clock hours above are per model and assume the run is TPM-bound,")
-    print("which on these free tiers it is. Models are run sequentially, so the")
-    print("total is the sum of the hours column.")
+    print("Wall-clock hours assume the run is TPM-bound within a day, which on")
+    print("these free tiers it is. DAYS assumes it is TPD-bound across days,")
+    print("which it also is -- those are two different ceilings and the run has")
+    print("to clear both.")
 
 
 def main():

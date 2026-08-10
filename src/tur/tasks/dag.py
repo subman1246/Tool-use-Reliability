@@ -189,6 +189,26 @@ class RoutingTask:
 
 def generate_routing_task(task_id: str, depth: int, distractor_level: int = 1,
                           seed: int = 0) -> RoutingTask:
+    """Build one routing task.
+
+    `distractor_level` is accepted, recorded on the task, and DELIBERATELY not
+    used to add tools. It is inert here, which the config's `distractor_level: 1`
+    does not convey on its own, hence this note.
+
+    The reason is that routing needs no separate distractors: the schema already
+    contains 2*depth tools, exactly one of which is correct at each step, and the
+    wrong one at each step is a genuine confusable rather than a tool that is
+    never correct anywhere. That is stronger selection pressure than the linear
+    variant's distractors provide, not weaker. Adding linear-style distractors on
+    top would change the arms in different directions and make the selection-error
+    rates non-comparable between them.
+
+    The consequence to keep in mind when reading results: the two arms differ in
+    schema composition as well as in routing, so cross-arm differences in
+    selection-error rate are not attributable to the routing rule alone. We
+    therefore do not draw cross-arm inferences from selection rates; the control
+    arm is used only as a null for L_t.
+    """
     rng = random.Random(seed)
     arg_name = "ref"
     branches: list[tuple[ToolSpec, ToolSpec]] = []
