@@ -41,6 +41,22 @@ def short(name: str) -> str:
     return name.split("/")[-1]
 
 
+def deepest_with_data(meta: dict, name: str) -> int | None:
+    """Deepest depth where this model actually has a measured L_t.
+
+    Needed because the planned grid runs to depth 8 but a cap-stopped or
+    time-bounded sweep leaves a nested prefix that may not reach it. Reporting
+    "L_t at depth 8 = nan" states nothing; reporting the deepest depth that has
+    data, labelled with which depth that is, states what was measured.
+    """
+    for d in reversed(meta["depths"]):
+        ci = meta["L_ci"].get(name, {}).get(str(d), {})
+        L = ci.get("L")
+        if L is not None and L == L:
+            return d
+    return None
+
+
 def sec(title: str) -> None:
     print()
     print("=" * 84)
@@ -128,6 +144,22 @@ def report_delta1(meta: dict) -> None:
               f"{d['n_given_correct']:>8}{d['n_given_wrong']:>8}")
     print("\n  delta_1 > 0 means a wrong step makes the NEXT step more likely to")
     print("  be wrong -- propagation, with no parametric assumption at all.")
+    zeros = [short(n) for n in meta["names"]
+             if meta["delta_1"][n]["n_given_wrong"] >= 20
+             and meta["delta_1"][n]["p_next_given_wrong"] == 0.0]
+    if zeros:
+        print()
+        print(f"  P(next correct | this one wrong) is EXACTLY 0.000 for "
+              f"{len(zeros)} model(s):")
+        print(f"    {', '.join(zeros)}")
+        print("  Not 'low' -- zero, over hundreds of transitions. Once the chain")
+        print("  leaves the gold trajectory it never returns. So delta_1 reduces")
+        print("  to P(next correct | this one correct), and the semantic recovery")
+        print("  rate r_sem is 0 as a measurement rather than as an estimate.")
+        print("  This is the sharpest divergence from the simulated policies,")
+        print("  which were configured with r_sem between 0.05 and 0.30, and it")
+        print("  matters for the fit: with no recovery to trade against, pi stops")
+        print("  being confounded with r_sem (see the correlations in section 4).")
 
 
 def report_fit(meta: dict, idata) -> None:
@@ -209,8 +241,14 @@ def report_h2(meta: dict, idata) -> None:
         print(f"    pi            {pi[lo]:.3f} -> {pi[hi]:.3f}  "
               f"(delta {pi[hi] - pi[lo]:+.3f})")
         d_lo = [x for x in meta["per_depth_extra"][lo]]
-        print(f"    L_t at deepest: {meta['L_ci'][lo][str(meta['depths'][-1])]['L']:+.3f}"
-              f" -> {meta['L_ci'][hi][str(meta['depths'][-1])]['L']:+.3f}")
+        d_lo, d_hi = deepest_with_data(meta, lo), deepest_with_data(meta, hi)
+        if d_lo and d_hi:
+            print(f"    L_t: {meta['L_ci'][lo][str(d_lo)]['L']:+.3f} at depth "
+                  f"{d_lo} -> {meta['L_ci'][hi][str(d_hi)]['L']:+.3f} at depth "
+                  f"{d_hi}" + ("   (DIFFERENT depths -- not a like-for-like "
+                               "contrast)" if d_lo != d_hi else ""))
+        else:
+            print("    L_t: not measurable for at least one of the pair yet")
         print()
     print("  NOTE: two points per family is not a scale CURVE. No free host offers")
     print("  3+ sizes of one family any more, so H2 is tested as a signed contrast")
@@ -246,10 +284,19 @@ def report_h4(meta: dict) -> None:
         for r in rows:
             i = r["step"]
             n = r["n_fresh_errors"]
+            if not n:
+                # A step with no fresh errors carries NaN shares by construction
+                # (0/0). It must be skipped, not weighted by zero: nan * 0 is nan,
+                # not 0, so a single model contributing no errors at a step index
+                # turned the whole pooled share for that step into nan. That is
+                # exactly what a ceiling-level model does at every step, so the
+                # pooled H4 table came out entirely nan while showing healthy
+                # error counts beside it.
+                continue
             pooled_n[i] += n
-            pooled_sel[i] += (r["sel_err_share"] or 0) * n
-            pooled_arg[i] += (r["arg_err_share"] or 0) * n
-            pooled_syn[i] += (r["f_syn"] or 0) * n
+            pooled_sel[i] += (r["sel_err_share"] or 0.0) * n
+            pooled_arg[i] += (r["arg_err_share"] or 0.0) * n
+            pooled_syn[i] += (r["f_syn"] or 0.0) * n
 
     print()
     print("  POOLED across models (the suite-level claim H4 is reported as):")
@@ -269,6 +316,10 @@ def report_h4(meta: dict) -> None:
         print(f"    {i:>5}{n:>14.0f}{fs:>8.3f}{sel:>11.3f}{arg:>11.3f}"
               f"{ratio:>9.3f}{'yes' if usable else 'THIN':>8}")
     print()
+    # Distinguish the two very different reasons H4 can fail to be testable.
+    n_usable = sum(1 for i in range(max_step) if pooled_n[i] >= 30)
+    arg_total = sum(pooled_arg[i] for i in range(max_step))
+    sel_total = sum(pooled_sel[i] for i in range(max_step))
     if len(sel_ratio) >= 4:
         xs, ys = zip(*sel_ratio)
         rho, p = sps.spearmanr(xs, ys)
@@ -280,11 +331,36 @@ def report_h4(meta: dict) -> None:
         print(f"    Spearman rho = {rho:+.3f}, p = {p:.4f}  ->  "
               f"{'SIGNIFICANT' if p < 0.05 else 'not significant'}")
         print(f"    direction: {verdict}")
+    elif arg_total < 1 and sel_total > 20:
+        print("  H4 IS NOT APPLICABLE ON THIS TASK VARIANT, and the reason is")
+        print("  more informative than a power limitation.")
+        print()
+        print(f"  Of {sel_total + arg_total:.0f} fresh (clean-context) errors, "
+              f"{sel_total:.0f} are SELECTION errors and {arg_total:.0f} are")
+        print("  argument errors. The argument channel is empty, so the")
+        print("  selection-to-argument ratio H4 is about is undefined at every")
+        print("  step index -- there is no mix to shift.")
+        print()
+        print("  Mechanism: on a routing task a fresh error means the parity rule")
+        print("  was mis-applied, i.e. the wrong tool was named. Transcribing the")
+        print("  argument is trivial by comparison -- it is copied verbatim from")
+        print("  the stated previous result -- and these models essentially never")
+        print("  get it wrong while holding a correct value. Argument errors DO")
+        print("  appear once the context is already poisoned, because the rule")
+        print("  applied to a corrupted value can coincidentally name the gold")
+        print("  tool while carrying the wrong number; but those are propagated")
+        print("  errors, which the composition deliberately excludes.")
+        print()
+        print("  So H4 is withdrawn for this run, not because the counts are thin")
+        print("  but because one of its two categories does not occur where the")
+        print("  composition is defined. Testing it would need a task variant")
+        print("  whose arguments can be got wrong independently of tool choice.")
     else:
-        print(f"  ONLY {len(sel_ratio)} step bins clear 30 fresh errors, which is")
-        print("  fewer than the 4 a rank-correlation trend needs to reach p<0.05")
-        print("  even at rho = -1. H4 IS WITHDRAWN for this run rather than")
-        print("  reported on counts that cannot support it.")
+        print(f"  ONLY {n_usable} step bins clear 30 fresh errors and only "
+              f"{len(sel_ratio)} yield a defined")
+        print("  sel/arg ratio, fewer than the 4 a rank-correlation trend needs to")
+        print("  reach p<0.05 even at rho = -1. H4 IS WITHDRAWN for this run")
+        print("  rather than reported on counts that cannot support it.")
 
 
 def report_agreement(meta: dict) -> None:
@@ -297,13 +373,22 @@ def report_agreement(meta: dict) -> None:
     print("  Validation (simulated routing policies) vs real models, on the")
     print("  quantities the validation could actually establish:")
     print()
-    depths = meta["depths"]
-    dd = str(depths[-1])
-    sim_L = [v["L_ci"][n][dd]["L"] for n in v["names"]]
-    real_L = [meta["L_ci"][n][dd]["L"] for n in meta["names"]]
-    print(f"    L_t at depth {dd}: simulated range "
-          f"[{min(sim_L):+.3f}, {max(sim_L):+.3f}], "
-          f"real range [{min(real_L):+.3f}, {max(real_L):+.3f}]")
+    real_pairs = [(deepest_with_data(meta, n), n) for n in meta["names"]]
+    real_pairs = [(d, n) for d, n in real_pairs if d]
+    if real_pairs:
+        common = min(d for d, _ in real_pairs)
+        sim_L = [v["L_ci"][n][str(common)]["L"] for n in v["names"]
+                 if str(common) in v["L_ci"][n]]
+        real_L = [meta["L_ci"][n][str(common)]["L"] for _, n in real_pairs]
+        real_L = [x for x in real_L if x == x]
+        print(f"    L_t at depth {common} (deepest depth every real model "
+              f"reached): simulated "
+              f"[{min(sim_L):+.3f}, {max(sim_L):+.3f}] vs real "
+              f"[{min(real_L):+.3f}, {max(real_L):+.3f}]")
+        deepest = max(d for d, _ in real_pairs)
+        if deepest != common:
+            print(f"    (the deepest bin any real model reached is {deepest}; "
+                  f"per-model depths differ because the sweep is incomplete)")
     sim_d1 = [v["delta_1"][n]["delta_1"] for n in v["names"]]
     real_d1 = [meta["delta_1"][n]["delta_1"] for n in meta["names"]]
     print(f"    delta_1: simulated [{min(sim_d1):+.3f}, {max(sim_d1):+.3f}], "

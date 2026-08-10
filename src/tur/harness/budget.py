@@ -216,21 +216,34 @@ def plan_suite(models: list[dict], days: float, headroom: float,
 
 
 def pooled_step_errors(plans: list[ModelPlan], p_correct: float = 0.50,
-                       recovery: float = 0.25, max_step: int = 8
+                       recovery: float = 0.25, max_step: int = 8,
+                       p_by_model: dict[str, float] | None = None
                        ) -> dict[int, float]:
     """Projected FRESH-error count at each step index, pooled across models.
 
     A step index i exists only in tasks of depth > i, and only trajectories still
     holding a clean context at step i can contribute a fresh error -- that is the
     restriction aggregate_by_step applies. Clean-context survival is propagated as
-    c_{i+1} = c_i * p + (1 - c_i) * r, with p the measured routing accuracy.
+    c_{i+1} = c_i * p + (1 - c_i) * r, with p the routing accuracy.
+
+    `p_by_model` supplies a MEASURED accuracy per model, and it matters far more
+    than it looks. A single pooled p treats every model as contributing errors in
+    proportion to its task count, but accuracy on this task is bimodal: the first
+    real run measured p ~ 0.55-0.70 on the 7-8B models and p ~ 0.99-1.00 on the
+    27B/70B/120B models. A model at ceiling contributes essentially NO fresh
+    errors however many tasks it runs, so pooling with p = 0.50 across six models
+    overstated the pooled counts by roughly a factor of three. Pass the measured
+    values once they exist; the default is a planning figure only.
     """
-    c, surv = 1.0, []
-    for _ in range(max_step):
-        surv.append(c)
-        c = c * p_correct + (1 - c) * recovery
     out = {}
     for i in range(max_step):
-        deeper = sum(n for plan in plans for d, n in plan.primary.items() if d > i)
-        out[i] = deeper * surv[i] * (1 - p_correct)
+        total = 0.0
+        for plan in plans:
+            p = (p_by_model or {}).get(plan.name, p_correct)
+            c = 1.0
+            for _ in range(i):
+                c = c * p + (1 - c) * recovery
+            deeper = sum(n for d, n in plan.primary.items() if d > i)
+            total += deeper * c * (1 - p)
+        out[i] = total
     return out

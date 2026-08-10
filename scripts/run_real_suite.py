@@ -138,13 +138,40 @@ def structural_anomalies(stats_by_depth, loaded: list[dict],
     p = [s.p_t for s in stats_by_depth]
     g = [s.g_t for s in stats_by_depth]
 
+    # Distinguish "the measurement is broken" from "the data really looks like
+    # this". A detector that cries wolf on correct data gets ignored, which is
+    # worse than not having it, so each flag below checks the benign explanation
+    # first and reports it instead when it holds.
+    free = [r for r in loaded if r["run_mode"] == "free"
+            and not r.get("backend_error", False)]
+    by_depth_last: dict[int, bool] = {}
+    for d in depths:
+        errs = [r for r in free if r["depth"] == d and not r["args_correct_strict"]]
+        # an error at the final step of a chain has no downstream step to poison,
+        # so it cannot propagate even in principle
+        by_depth_last[d] = bool(errs) and all(r["step"] == d - 1 for r in errs)
+
     same = [d for d, a, b in zip(depths, p, g)
             if a == a and b == b and abs(a - b) < 1e-9]
     if len(same) == len([a for a in p if a == a]) and len(same) > 1:
-        out.append(f"p_t and g_t are IDENTICAL at every depth {same}: the free "
-                   f"and teacher-forced arms are not diverging at all, which is "
-                   f"what a degenerate task suite looks like (the linear suite "
-                   f"did exactly this)")
+        terminal = [d for d in same if by_depth_last.get(d)]
+        n_free = sum(1 for r in free if r["depth"] in same)
+        if terminal == same:
+            out.append(f"p_t == g_t at depths {same}, but BENIGN: every error at "
+                       f"those depths occurs at the FINAL step of its chain, "
+                       f"where there is no downstream step to poison. Propagation "
+                       f"is impossible by construction here, not absent by "
+                       f"failure. Needs deeper bins or more n to say anything.")
+        elif n_free < 100:
+            out.append(f"p_t == g_t at depths {same} on only {n_free} free-arm "
+                       f"observations -- too few to distinguish a ceiling effect "
+                       f"from a broken arm. Treat as inconclusive, not as L_t = 0.")
+        else:
+            out.append(f"p_t and g_t are IDENTICAL at every depth {same} on "
+                       f"{n_free} observations, with errors NOT confined to final "
+                       f"steps: the free and teacher-forced arms are not diverging "
+                       f"where they should. That is what a degenerate task suite "
+                       f"looks like (the linear suite did exactly this).")
 
     deep = [(d, a) for d, a in zip(depths, p) if d > 1 and a == a]
     if deep and all(a >= 0.999 for _, a in deep):
@@ -164,9 +191,29 @@ def structural_anomalies(stats_by_depth, loaded: list[dict],
     total = sum(buckets.values())
     if total >= 20 and len(buckets) == 1:
         only = next(iter(buckets))
-        out.append(f"all {total} errors fall in ONE bucket ({only!r}): the "
-                   f"error-type decomposition has nothing to decompose, which is "
-                   f"how the mis-bucketed selection errors presented")
+        all_executed = all(r.get("executed", True) for r in loaded)
+        no_retries = all(r.get("n_attempts", 1) == 1 for r in loaded)
+        if only == "semantic" and all_executed and no_retries:
+            # Verified genuine rather than a bucketing failure: a syntactic error
+            # is by definition a call that did not execute, and a retry only fires
+            # on one. If every call executed and no retry ever fired, there were
+            # no syntactic errors to bucket. This is a finding about real models,
+            # not a defect: it empties the syntactic recovery channel of the state
+            # model, so f_syn = 0 and r_syn is unmeasurable.
+            sel_split = {r.get("selection_matches_gold") for r in loaded}
+            note = ("the selection-vs-argument split is still populated, so H4's "
+                    "quantity survives" if len(sel_split) > 1 else
+                    "and the selection split is degenerate too, so the whole "
+                    "decomposition is empty")
+            out.append(f"all {total} errors are {only!r}, VERIFIED GENUINE: every "
+                       f"call executed and no retry ever fired, so there were no "
+                       f"syntactic failures to classify. f_syn = 0 and r_syn is "
+                       f"unmeasurable -- {note}. Not a bucketing defect.")
+        else:
+            out.append(f"all {total} errors fall in ONE bucket ({only!r}) while "
+                       f"executed={all_executed} no_retries={no_retries}: the "
+                       f"error-type decomposition has nothing to decompose, which "
+                       f"is how the mis-bucketed selection errors presented")
 
     pf = [s.parse_fail_rate for s in stats_by_depth if s.parse_fail_rate == s.parse_fail_rate]
     if pf and min(pf) > 0.5:
