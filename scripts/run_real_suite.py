@@ -88,11 +88,12 @@ def log(lines: list[str], msg: str) -> None:
 
 
 def _suite_for(variant: str, depths, per_depth, distractor_level: int, seed: int,
-               arg_shift: int = 0):
+               arg_shift: int = 0, shuffle_branch_order: bool = False):
     if variant == "routing":
         return generate_routing_suite(depths, per_depth, distractor_level,
                                       base_seed=seed * 31 + 1000,
-                                      arg_shift=arg_shift)
+                                      arg_shift=arg_shift,
+                                      shuffle_branch_order=shuffle_branch_order)
     return generate_suite(depths, per_depth, distractor_level,
                           base_seed=seed * 31 + 1000)
 
@@ -232,7 +233,8 @@ def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
              call_mode: str, cache_dir: str, headroom: float = 0.80,
              variant: str = "routing", tpd: int | None = None,
              lines: list[str] | None = None, deadline: float | None = None,
-             arg_shift: int = 0) -> tuple[list[dict], dict, bool]:
+             arg_shift: int = 0, shuffle_branch_order: bool = False
+             ) -> tuple[list[dict], dict, bool]:
     """Run one model's full sweep on one task variant.
 
     Returns (records, backend stats, hit_daily_cap). The cap flag is returned
@@ -256,7 +258,8 @@ def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
     records = []
     for seed in range(seeds):
         suite = _suite_for(variant, depths, per_depth, distractor_level, seed,
-                           arg_shift=arg_shift)
+                           arg_shift=arg_shift,
+                           shuffle_branch_order=shuffle_branch_order)
         for i, task in enumerate(suite):
             if deadline is not None and time.monotonic() > deadline:
                 # Stop cleanly on a wall-clock budget, exactly as on a token cap.
@@ -359,6 +362,9 @@ def main():
     # docs/METHOD_NOTES_real_run.md for why this exists (H4 had an empty category
     # on the copy variant, so the hypothesis could not be tested at all).
     arg_shift = int(cfg.get("arg_shift", 0) or 0)
+    # Randomise which branch the rule text lists first. A control, not a variant:
+    # it changes only the wording, never which tool is correct.
+    shuffle_order = bool(cfg.get("shuffle_branch_order", False))
 
     # The control arm is a second, much smaller sweep on the OTHER task variant.
     # Its expected result is L_t ~ 0, and it is run per model alongside the
@@ -477,7 +483,8 @@ def main():
             m, depths, my_primary, seeds, max_retries, distractor_level,
             feedback, args.call_mode, cache_dir, args.headroom,
             variant=variant, tpd=my_tpd, lines=lines,
-            deadline=deadline, arg_shift=arg_shift)
+            deadline=deadline, arg_shift=arg_shift,
+            shuffle_branch_order=shuffle_order)
         out = {"model": m, "records": recs, "stats": stats, "capped": capped,
                "lines": lines, "control": None, "plan": plan,
                "primary_alloc": my_primary, "control_alloc": my_control}
@@ -754,6 +761,7 @@ def main():
                   "measured_recovery": recov, "per_step": per_step,
                   "priors_used": {"r_syn": prior_rs, "r_sem": prior_rm},
                   "task_variant": variant, "arg_shift": arg_shift,
+                  "shuffle_branch_order": shuffle_order,
                   "control_arm": control,
                   "structural_anomalies": anomalies,
                   "discovered_tpd": load_discovered_tpd(),

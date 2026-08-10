@@ -1,0 +1,66 @@
+# CONTROL CONDITION: randomised branch presentation order.
+#
+# Run as:
+#   py scripts/run_real_suite.py --config config/shuffle_control.yaml --tag shuffle
+#   py scripts/report_real.py --tag shuffle
+#
+# WHAT IT CONTROLS FOR
+#
+# The primary arm found that rule-application accuracy depends strongly on the parity
+# of the value held, in opposite directions for two models (llama-3.1-8b: 0.525 on even
+# refs vs 0.742 on odd; allam-2-7b: 0.647 vs 0.169). The explanation offered is a
+# position bias: the rule text lists the even branch first, and allam-2-7b picks the
+# first-listed tool ~80% of the time almost regardless of the ref.
+#
+# But in the primary arm those two accounts are CONFOUNDED. With a fixed presentation
+# order, the correct tool for an even ref just *is* the first-listed tool, so
+# "always picks the first-listed option" and "follows the rule but only succeeds on
+# even refs" predict overlapping data. The discrimination statistic separates them --
+# P(pick first-listed | ref even) - P(pick first-listed | ref odd), which is 0.041 for
+# allam-2-7b and 0.267 for llama-3.1-8b -- and that is sufficient evidence. This
+# condition makes it direct rather than inferential.
+#
+# Randomising which branch is listed first, per step, decouples position from parity:
+# `first_listed_even` is recorded on every step record, so accuracy can be compared
+# across the four cells (ref parity x presentation order). A pure position bias shows
+# up as accuracy tracking presentation order and ignoring parity; genuine rule-following
+# shows up as the reverse.
+#
+# Crucially the shuffle changes only the WORDING of the rule, never which tool is
+# correct: the gold trajectory is bit-identical to the unshuffled task with the same
+# seed, and a perfect policy still scores 1.000 at every depth
+# (tests/test_shuffle_control.py).
+task_variant: routing
+shuffle_branch_order: true
+
+# copy-argument, matching the primary arm, so presentation order is the ONLY thing that
+# differs from the data already collected
+arg_shift: 0
+
+# Depths 1 and 2 only. The bias is a per-step property and needs many steps rather than
+# deep chains, and cost is roughly quadratic in depth: this whole condition costs
+# 860,310 tokens (0.63 days of suite-wide allowance) against 2.9 days for the primary
+# arm's depth-8 bin alone.
+depths: [1, 2]
+per_depth: {1: 60, 2: 60}
+
+control_arm: null
+budget_days: 1
+
+distractor_level: 1
+seeds: 1
+feedback: structured
+call_mode: uniform
+max_retries: 1
+
+models:
+  - {name: "groq/llama-3.1-8b-instant",    family: "llama",   scale: 8,   provider: "groq", rpd: 14400, tpm: 6000,  tpd: 500000}
+  - {name: "groq/llama-3.3-70b-versatile", family: "llama",   scale: 70,  provider: "groq", rpd: 1000,  tpm: 12000, tpd: 100000}
+  - {name: "groq/openai/gpt-oss-20b",      family: "gpt-oss", scale: 20,  active_scale: 3.6, provider: "groq", rpd: 1000, tpm: 8000, tpd: 200000}
+  - {name: "groq/openai/gpt-oss-120b",     family: "gpt-oss", scale: 120, active_scale: 5.1, provider: "groq", rpd: 1000, tpm: 8000, tpd: 200000}
+  - {name: "groq/qwen/qwen3.6-27b",        family: "qwen",    scale: 27,  provider: "groq", rpd: 1000,  tpm: 8000, tpd: 200000}
+  - {name: "groq/allam-2-7b",              family: "allam",   scale: 7,   provider: "groq", rpd: 7000,  tpm: 6000,  tpd: 500000}
+
+paths:
+  results: data/results
+  cache: data/cache

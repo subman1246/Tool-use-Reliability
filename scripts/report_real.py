@@ -363,6 +363,89 @@ def report_h4(meta: dict) -> None:
         print("  rather than reported on counts that cannot support it.")
 
 
+def report_bias(meta: dict, tag: str) -> None:
+    """Rule-following vs position bias, and the parity structure of held values.
+
+    Reads `held_ref` and `first_listed_even` straight off the records, so this runs
+    on any condition without a cache replay.
+
+    The confound this section exists to break: with a FIXED presentation order the
+    correct tool for an even ref is also the first-listed tool, so "always picks the
+    first-listed option" and "follows the rule but only succeeds on even refs"
+    predict the same data. Two things separate them. The discrimination statistic
+    P(pick first-listed | even) - P(pick first-listed | odd) is 0 for a pure position
+    bias and large for genuine rule-following, whatever the accuracy. And under
+    `shuffle_branch_order` the order varies per step, which decouples the two
+    directly.
+    """
+    sec("8. RULE-FOLLOWING vs POSITION BIAS, AND PARITY STRUCTURE")
+    depths = meta["depths"]
+    any_data = False
+    for name in meta["names"]:
+        path = RES / f"{tag}_{name.replace('/', '_')}.jsonl"
+        if not path.exists():
+            continue
+        rows = [json.loads(l) for l in path.open() if l.strip()]
+        fr = [r for r in rows if r["run_mode"] == "free"
+              and not r.get("backend_error", False)
+              and r.get("held_ref") is not None]
+        if len(fr) < 30:
+            continue
+        any_data = True
+        even = [r for r in fr if r["held_ref"] % 2 == 0]
+        odd = [r for r in fr if r["held_ref"] % 2 == 1]
+        acc = lambda rs: (sum(r["selection_correct"] for r in rs) / len(rs)
+                          if rs else float("nan"))
+        print("\n  " + short(name) +
+              f"   (n={len(fr)} free steps with a recorded held ref)")
+        print(f"    rule-application accuracy: held even {acc(even):.3f} "
+              f"(n={len(even)})   held odd {acc(odd):.3f} (n={len(odd)})")
+        # did it pick the FIRST-LISTED tool? recoverable from selection_correct plus
+        # the parity and the order: correct tool is the even-branch tool iff held is
+        # even, and the even branch is listed first iff first_listed_even
+        def picked_first(r):
+            correct_is_even_branch = r["held_ref"] % 2 == 0
+            first_is_even = r.get("first_listed_even", True)
+            picked_even_branch = (correct_is_even_branch
+                                  if r["selection_correct"] else
+                                  not correct_is_even_branch)
+            return picked_even_branch == first_is_even
+        pe = [picked_first(r) for r in even]
+        po = [picked_first(r) for r in odd]
+        if pe and po:
+            fe, fo = sum(pe) / len(pe), sum(po) / len(po)
+            disc = fe - fo
+            print(f"    picks the FIRST-LISTED tool: ref even {fe:.3f}   "
+                  f"ref odd {fo:.3f}   discrimination {disc:+.3f}")
+            verdict = ("POSITION BIAS -- barely conditions on the ref at all"
+                       if abs(disc) < 0.10 else
+                       "conditions on the ref, i.e. genuinely applies the rule")
+            print(f"      -> {verdict}")
+        orders = {r.get("first_listed_even", True) for r in fr}
+        if len(orders) > 1:
+            print("    presentation order was RANDOMISED, so parity and position are")
+            print("    decoupled; the four cells below settle it without inference:")
+            for par, pname in ((0, "even"), (1, "odd ")):
+                for fl in (True, False):
+                    cell = [r for r in fr if r["held_ref"] % 2 == par
+                            and r.get("first_listed_even", True) is fl]
+                    if len(cell) >= 10:
+                        print(f"      held {pname}, even-branch listed "
+                              f"{'first ' if fl else 'second'}: "
+                              f"acc={acc(cell):.3f} (n={len(cell)})")
+        else:
+            print("    presentation order was FIXED (even branch always first), so")
+            print("    position and parity are confounded here; the discrimination")
+            print("    statistic above is what separates them. See the `shuffle`")
+            print("    condition for the direct control.")
+        # parity balance of held values, which differs between conditions
+        print(f"    share of held refs that are even: {len(even) / len(fr):.3f}"
+              f"   (a skew here confounds any clean-vs-poisoned comparison)")
+    if not any_data:
+        print("  No records carry `held_ref` yet -- it is recorded from this run")
+        print("  onward. Re-run to populate (cached completions replay for free).")
+
+
 def report_agreement(meta: dict) -> None:
     sec("7. SIMULATED vs REAL -- real is primary by pre-registration")
     val = RES / "routingval_meta.json"
@@ -430,6 +513,7 @@ def main() -> None:
     report_h2(meta, idata)
     report_h4(meta)
     report_agreement(meta)
+    report_bias(meta, args.tag)
 
 
 if __name__ == "__main__":

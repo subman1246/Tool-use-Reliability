@@ -566,6 +566,16 @@ class StepRecord:
     # correctly continued from the value the agent actually held.
     args_correct_given_state: bool = False
     correct_given_state: bool = False
+    # The value actually carried INTO this step. Recorded because the routing rule
+    # conditions on it, so any analysis of whether a model is following the rule or
+    # defaulting to a fixed branch needs it. It was previously recoverable only by
+    # replaying the whole sweep against the response cache.
+    held_ref: int | None = None
+    # Which branch was presented first in the rule text at this step. With a fixed
+    # presentation order, "picks the first-listed tool" and "applies the rule
+    # correctly for even refs" predict overlapping data; recording the order lets
+    # the two be separated directly rather than only via a discrimination statistic.
+    first_listed_even: bool = True
 
 
 # --------------------------- prompt ---------------------------
@@ -602,6 +612,14 @@ def _render_schema(tools: list[dict], style: str = "verbose") -> str:
     if style != "verbose":
         raise ValueError(f"unknown schema style {style!r}")
     return json.dumps(tools, indent=0)
+
+
+def _first_listed_even(task, step: int) -> bool:
+    """Was the even-ref branch listed first in the rule text at this step?"""
+    order = getattr(task, "present_odd_first", None)
+    if not order:
+        return True
+    return not order[step]
 
 
 def _expected_args_given_held(task, step: int, held: int) -> dict:
@@ -683,6 +701,7 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
         # stated transformation of it, comparing the carried value against the
         # expected ARGUMENT would mark every clean step as poisoned.
         expected_carry = task.seed_value if t == 0 else task.gold[t - 1].output
+        carried_in = carried      # `carried` is overwritten by execution below
         stalled_in = stalled
         context_clean = (carried == expected_carry) and not stalled
         attempts = 0
@@ -737,6 +756,8 @@ def run_free(task: Task, backend: Backend, call_mode: str = "uniform",
             attempts, executed, context_clean, recovered, stalled_in=stalled_in,
             args_correct_given_state=final_score.args_correct_given_state,
             correct_given_state=final_score.correct_given_state,
+            held_ref=carried_in,
+            first_listed_even=_first_listed_even(task, t),
             backend_error=bool(call and call.is_backend_error)))
     return records
 
@@ -805,7 +826,9 @@ def run_teacher_forced(task: Task, backend: Backend, call_mode: str = "uniform",
             attempts, executed, True, recovered, stalled_in=False,
             backend_error=bool(final_call and final_call.is_backend_error),
             args_correct_given_state=final_score.args_correct_given_state,
-            correct_given_state=final_score.correct_given_state))
+            correct_given_state=final_score.correct_given_state,
+            held_ref=correct_ref,
+            first_listed_even=_first_listed_even(task, t)))
     return records
 
 

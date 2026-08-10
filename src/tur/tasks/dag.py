@@ -179,6 +179,13 @@ class RoutingTask:
     # wrong-able independently of tool choice, which is the minimum needed for the
     # hypothesis to have two categories to shift between.
     arg_shift: int = 0
+    # Per-step presentation order for the rule text: True means the ODD branch is
+    # listed first at that step. Exists as a CONTROL, because with a fixed order
+    # "picks the first-listed tool" and "applies the rule correctly for even refs"
+    # predict overlapping data -- the correct tool for an even ref just is the
+    # first-listed one. Randomising the order breaks that confound directly rather
+    # than relying on a discrimination statistic to separate the two.
+    present_odd_first: list[bool] = field(default_factory=list)
     tool_by_name: dict[str, ToolSpec] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -205,13 +212,20 @@ class RoutingTask:
     def routing_rule_text(self) -> str:
         lines = []
         for i, (even_t, odd_t) in enumerate(self.branches):
-            lines.append(f"  step {i}: if the incoming ref is even call "
-                         f"'{even_t.name}', if odd call '{odd_t.name}'")
+            odd_first = (self.present_odd_first[i]
+                         if i < len(self.present_odd_first) else False)
+            if odd_first:
+                lines.append(f"  step {i}: if the incoming ref is odd call "
+                             f"'{odd_t.name}', if even call '{even_t.name}'")
+            else:
+                lines.append(f"  step {i}: if the incoming ref is even call "
+                             f"'{even_t.name}', if odd call '{odd_t.name}'")
         return "\n".join(lines)
 
 
 def generate_routing_task(task_id: str, depth: int, distractor_level: int = 1,
-                          seed: int = 0, arg_shift: int = 0) -> RoutingTask:
+                          seed: int = 0, arg_shift: int = 0,
+                          shuffle_branch_order: bool = False) -> RoutingTask:
     """Build one routing task.
 
     `distractor_level` is accepted, recorded on the task, and DELIBERATELY not
@@ -256,16 +270,21 @@ def generate_routing_task(task_id: str, depth: int, distractor_level: int = 1,
         gold.append(Step(tool=chosen.name, args=args, output=out))
         prev = out
 
+    # presentation order only changes how the rule is WORDED, never which tool is
+    # correct, so the gold trajectory above is untouched by it
+    order = ([rng.random() < 0.5 for _ in range(depth)] if shuffle_branch_order
+             else [False] * depth)
     task = RoutingTask(task_id=task_id, depth=depth, branches=branches, gold=gold,
                        seed_value=seed_value, distractor_level=distractor_level,
-                       arg_shift=arg_shift)
+                       arg_shift=arg_shift, present_odd_first=order)
     return task
 
 
 def generate_routing_suite(depths: list[int], per_depth: "int | dict[int, int]",
                            distractor_level: int = 1,
                            base_seed: int = 0,
-                           arg_shift: int = 0) -> list[RoutingTask]:
+                           arg_shift: int = 0,
+                           shuffle_branch_order: bool = False) -> list[RoutingTask]:
     """As generate_suite, for the routing variant.
 
     task_id embeds base_seed. It did not, and the consequence was severe: every
@@ -295,5 +314,6 @@ def generate_routing_suite(depths: list[int], per_depth: "int | dict[int, int]",
             seed = base_seed + 500000 + d * 100003 + k
             tasks.append(generate_routing_task(f"r{d}_{k}_s{base_seed}", d,
                                                distractor_level, seed,
-                                               arg_shift=arg_shift))
+                                               arg_shift=arg_shift,
+                                               shuffle_branch_order=shuffle_branch_order))
     return tasks

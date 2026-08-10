@@ -310,8 +310,15 @@ Per-model, because pooled zero and per-model zero are different claims:
 | gpt-oss-120b | 8 | 0 | 0.312 |
 | qwen3.6-27b | 0 | -- | **undefined** |
 
-$\pi = 1.000$ in all four models that can be measured; `qwen3.6-27b` never left a clean
-context so its $\pi$ is undefined, not 1. And this is *forced* by the same mechanism as
+The support is not uniform across models and should not be described as though it were.
+**Two models carry the empirical claim** -- 397 and 269 poisoned steps, with 95% upper
+bounds of 0.0075 and 0.0111 on the success rate. **Two are consistent but
+uninformative**: at 9 and 8 poisoned steps their upper bounds are 0.283 and 0.312, so
+they exclude almost nothing and contribute almost no evidence. **One is undefined**:
+`qwen3.6-27b` never left a clean context.
+
+What extends the claim beyond the two informative models is the mechanism, not the
+count. And this is *forced* by the same mechanism as
 the recovery result: a poisoned step holds a wrong value, so the gold argument is
 exactly as unreachable as a recovery would be.
 
@@ -344,6 +351,21 @@ construction. **That is why the transformed-argument condition tests this decomp
 generality and not only H4** -- there the argument requires arithmetic on the held value,
 so the argument channel can fail on competence grounds.
 
+#### An undefined severity is the correct output, not a gap
+
+`qwen3.6-27b` produced **zero** poisoned-context steps across 452 records: it never once
+carried a wrong value forward. Its severity is therefore **undefined** -- not zero, and
+not small. There is no conditional rate to form, because the conditioning event never
+occurred.
+
+This is worth stating rather than passing over, because it is the case where an aggregate
+score reports something misleading. A suite-level severity that pools this model in
+would silently assign it whatever the pooled rate happens to be, and a per-model figure
+of 0.000 would read as "poisoning does not hurt this model" when the truth is "this model
+was never poisoned". We report it as undefined with the observation count attached, and
+**do not pool it into any suite-level estimate**. If the depth-6 bin produces no errors
+either, it stays undefined and is reported that way.
+
 ### 4.1b A branch-choice bias, and why one severity estimate came out negative
 
 Estimated per step rather than pooled, one conditional $\pi$ came out at **-0.312**
@@ -371,6 +393,29 @@ it is supposed to be conditioning on. Its discrimination is 0.041: **it is not f
 the routing rule at all**, and its apparent competence when the ref happens to be even
 is the bias coinciding with the answer. `llama-3.1-8b-instant` does discriminate
 (+0.267), weakly but genuinely.
+
+**The confound, and why the discrimination statistic resolves it.** With a fixed
+presentation order these two accounts predict overlapping data: the rule text always
+lists the even branch first, so *the correct tool for an even ref is also the
+first-listed tool*. "Always picks the first-listed option" and "follows the rule but
+only succeeds on even refs" therefore produce the same accuracy pattern, and accuracy
+alone cannot separate them.
+
+Discrimination separates them because it conditions on the ref rather than on the
+outcome. A pure position bias picks the first-listed tool at the same rate whatever the
+ref, so its discrimination is 0 by construction, *however high or low its accuracy*. A
+model applying the rule must pick the first-listed tool more often when the ref is even.
+The measured values -- 0.041 for `allam-2-7b` against 0.267 for `llama-3.1-8b-instant`
+-- are therefore diagnostic of the mechanism and not of the accuracy, which is what
+makes them evidence.
+
+We nonetheless run the direct control, because it is cheap: `config/shuffle_control.yaml`
+randomises which branch is listed first at each step, which decouples position from
+parity outright and lets accuracy be compared across the four cells (ref parity x
+presentation order). It costs 860,310 tokens, 0.63 days of suite-wide allowance, against
+2.9 days for the primary arm's depth-8 bin alone. `tests/test_shuffle_control.py` asserts
+the control is inert: gold trajectories are bit-identical to the unshuffled tasks, a
+perfect policy still scores 1.000, and both orders actually occur.
 
 Two consequences. This is a **confound** for clean-versus-poisoned comparisons whenever
 the two subsets differ in parity composition -- at step 2 the clean subset was 69%
