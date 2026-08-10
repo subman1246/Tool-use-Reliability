@@ -601,14 +601,24 @@ def main():
         # models at depth this is likely, not hypothetical, so say so loudly --
         # run_full_analysis printed this note and run_real_suite silently
         # dropped it.
-        if any(filled):
-            bad = [depths[i] for i, fl in enumerate(filled) if fl]
-            print(f"  WARNING: {m['name']} needed substituted inputs at "
-                 f"depth(s) {bad} -- p_t and/or f_syn were degenerate there "
-                 f"and were filled from a neighbouring depth. The fit for this "
-                 f"model is partly driven by placeholder values; L_t at those "
-                 f"depths is the trustworthy quantity.")
-            extra_filled[m["name"]] = bad
+        if filled["any"].any():
+            bad_p = [depths[i] for i, fl in enumerate(filled["p"]) if fl]
+            bad_f = [depths[i] for i, fl in enumerate(filled["f_syn"]) if fl]
+            # Report the two separately. A depth can have a perfectly measured
+            # p_t and still have no f_syn, because f_syn needs fresh ERRORS
+            # while p_t only needs observations -- which is what a ceiling-level
+            # model produces at every depth. Conflating them claimed p_t was a
+            # placeholder when it was measured.
+            if bad_p:
+                print(f"  WARNING: {m['name']} has SUBSTITUTED p_t at depth(s) "
+                     f"{bad_p} -- no usable teacher-forced data there, so the "
+                     f"fit is partly driven by placeholders. L_t is undefined "
+                     f"at those depths, not zero.")
+            if bad_f:
+                print(f"  NOTE: {m['name']} has substituted f_syn at depth(s) "
+                     f"{bad_f} -- p_t is measured there, but no fresh errors "
+                     f"exist to estimate the syntactic share from.")
+            extra_filled[m["name"]] = {"p": bad_p, "f_syn": bad_f}
         succ = np.array([round(s.g_t * s.n_g) if s.n_g else 0 for s in stats_by_depth])
         tri = np.array([s.n_g for s in stats_by_depth])
 

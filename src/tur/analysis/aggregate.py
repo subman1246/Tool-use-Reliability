@@ -321,13 +321,22 @@ def stats_to_arrays(stats: list[DepthStats]):
     nearest depth that has data (forward, then backward), which is a
     conservative placeholder that should be flagged in diagnostics, not a
     substitute for having enough samples.
+
+    Returns `(p, f_syn, filled)` where `filled` is a dict of per-quantity boolean
+    arrays plus an `any` array. The two must be kept apart: a depth can have a
+    perfectly good p_t and still have no f_syn, because f_syn needs fresh ERRORS
+    while p_t only needs observations -- which is exactly what a ceiling-level
+    model produces. The single OR-ed flag this used to return caused genuinely
+    measured p_t points to be reported and plotted as placeholders, and the
+    runner's warning text to claim p_t was substituted when it was not.
     """
     p = np.array([s.p_t for s in stats], dtype=float)
     f = np.array([s.f_syn for s in stats], dtype=float)
-    filled_flags = np.isnan(p) | np.isnan(f)
+    filled = {"p": np.isnan(p), "f_syn": np.isnan(f),
+              "any": np.isnan(p) | np.isnan(f)}
     p = _fill_nan(p)
     f = _fill_nan(f, default=0.5)
-    return p, f, filled_flags
+    return p, f, filled
 
 
 def _fill_nan(arr: np.ndarray, default: float = None) -> np.ndarray:

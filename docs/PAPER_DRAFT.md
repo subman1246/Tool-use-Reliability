@@ -8,7 +8,8 @@ real models; everything else is complete and ready for review/editing.*
 
 ## Abstract
 
-**[PENDING REAL DATA — draft shape below, fill in after real results]**
+**[INTERIM — numbers below are from a partial sweep; see §5.0 for exactly what is
+and is not yet collected. Every figure quoted is measured, none is projected.]**
 
 Tool-augmented language model agents are increasingly deployed to act on real
 systems, where a single incorrect function call can silently derail an entire
@@ -18,15 +19,31 @@ wrong tool and forming wrong arguments — and obscures how errors made early in
 a multi-step task propagate to corrupt everything downstream. We introduce a
 correct-invocation rate that disaggregates tool selection from argument
 correctness, measured both under a clean, teacher-forced context and under a
-model's own free-running context, across [N] models spanning [scale/family/
-tuning axes] on a fixed, contamination-free suite of multi-step tasks. We find
-that [headline finding 1 — e.g., propagation loss grows with dependency depth
-and separates models more sharply than single-step accuracy does], and that
-[headline finding 2 — e.g., a parametric severity/recovery model is not fully
-identifiable under exact-match scoring, while a simple fit-free propagation
-metric reliably orders models by severity]. Our pipeline, task suite, and
-analysis code are released to support reproducible evaluation of tool-use
-reliability at the invocation level.
+model's own free-running context, across six open-weight models on a fixed,
+contamination-free suite of multi-step tasks with dependency depths from 1 to 8.
+
+Separating the two arms lets us split degradation into a context-length component
+and a propagation component. On the 7–8B models the split is stark: the
+teacher-forced baseline declines gently with depth (0.700 → 0.549) while the
+free-running rate collapses (0.700 → 0.167), so that by depth 6 roughly **70% of a
+model's own clean-context capability is lost to its own earlier mistakes**
+(net propagation loss $L_t$ = 0.696 and 0.700, 89% CI widths under 0.20). We
+further find that **recovery does not merely decay — it is absent**:
+$P(\text{next call correct} \mid \text{current call wrong})$ is exactly 0.000 over
+484 transitions, so once a chain leaves its gold trajectory it never returns. That
+collapses the three-state severity/recovery model to an absorbing two-state chain
+and, unexpectedly, *improves* the identifiability that simulated validation had
+flagged as the method's main weakness, because there is no recovery rate left for
+severity to trade against.
+
+Two negative results are reported rather than omitted. A hypothesised shift in
+error composition along the chain is **untestable on this task family**, not for
+lack of statistical power but because 302 of 302 clean-context errors are tool
+*selection* errors and the argument channel is empty where the composition is
+defined. And the larger models in the suite sit at ceiling on these tasks
+($p_t \approx 1.000$), so scale contrasts remain unresolved. Our pipeline, task
+suite, and analysis code are released, together with the measured provider rate
+limits that constrain replication and are documented nowhere else.
 
 ---
 
@@ -550,59 +567,193 @@ the agent down a wrong branch and selection errors can propagate.
 
 ---
 
-## 5. Results [PENDING REAL DATA]
+## 5. Results
 
-*This section is a template. Replace each subsection with the corresponding
-output of `scripts/run_real_suite.py` followed by
-`python -m tur.analysis.plots --tag real`.*
+Full tables, per-model achieved sample sizes, and the diagnostic checks behind
+every claim here are in `docs/RESULTS_real_run.md`. This section states the
+findings; that document shows the working.
+
+### 5.0 What is collected, and what is not
+
+The sweep is **incomplete** and the results below are read accordingly. Cost on
+this task family is roughly quadratic in dependency depth — the tool schema grows
+with depth and the whole transcript is re-sent at every step — and the binding
+constraint is an undocumented per-model daily token allowance (§3.7). One day of
+the eight-day window has been spent. Depths 1, 2 and 4 are complete for five of
+six models; depth 6 is partial; **depth 8 has no data on any model**, and one
+model (`gpt-oss-20b`) has none at all because pilot runs earlier the same day had
+consumed 199,814 of its 200,000 daily tokens before the sweep began.
+
+Since $L_t$ grows with depth, and since the larger models only begin to make
+errors at depth, the missing bins are disproportionately the informative ones.
+Nothing below should be read as final, and two of the hypotheses are explicitly
+unresolved for this reason rather than answered weakly.
+
+Models run **nested prefixes** of one task suite, sized to their individual token
+allowances, so $n$ differs across models by design; cross-model comparisons are
+made on the common prefix. §3.7 gives the argument and `tests/test_nesting.py`
+asserts the property it depends on.
 
 ### 5.1 Per-depth clean baseline and global correctness
 
-*Table: $p_t$, $g_t$ per model per depth (from `real_meta.json`). Figure 1
-($p_t$ vs $g_t$, propagation gap).*
+The two arms separate cleanly on the two small models. On
+`llama-3.1-8b-instant`, the teacher-forced baseline $p_t$ falls from 0.700 at
+depth 1 to 0.549 at depth 6 — a 22% relative decline, which is the
+context-length effect the design exists to isolate — while the free-running rate
+$g_t$ falls from 0.700 to 0.167, a 76% decline. `allam-2-7b` behaves the same way
+(0.533 → 0.556 baseline, 0.533 → 0.167 free-running). Figure 1.
+
+$L_1 = 0.000$ **exactly** on every model, not approximately. At depth 1 both arms
+construct an identical prompt and share one cached response, so the
+baseline-purity property holds by construction rather than within tolerance. It is
+the cheapest available check that the two arms are wired correctly.
+
+The clearest evidence is not the depth curve but the **step-index profile**, which
+requires no model at all. On `llama-3.1-8b-instant` at depth 6, error counts per
+step index on the *same tasks* were 21, 32, 35, 37, 40, 40 in the free arm against
+21, 17, 15, 18, 20, 20 teacher-forced. The arms are identical at step 0, as they
+must be since the context is the same there, then the free arm diverges upward and
+stays up while the teacher-forced arm stays flat. A flat teacher-forced profile is
+what rules out context growth as the explanation; 94 of 246 shared (task, step)
+cells disagree between arms.
+
+**The three larger models are at ceiling** ($p_t$ = 0.865–1.000 at every depth
+reached), so $L_t = 0$ there is a statement about the tasks, not about robustness.
+Their $p_t = g_t$ identity was flagged by an automated structural check and then
+diagnosed rather than trusted: on `llama-3.3-70b-versatile` every one of its seven
+errors falls at step 2 or 3 of a depth-4 chain, and step 3 is the *final* step,
+where no downstream call exists to poison. Propagation is impossible there by
+construction, not absent by failure, so the correct reading is **inconclusive**
+pending the deeper bins.
 
 ### 5.2 Net propagation loss
 
-*Table: $L_t$ with bootstrap CIs, per model, averaged and at max depth.
-Figure 2. State explicitly whether CIs separate model tiers, as they did in
-the validation run.*
+| depth | `llama-3.1-8b` $L_t$ [89% CI] | `allam-2-7b` $L_t$ [89% CI] |
+|---|---|---|
+| 1 | 0.000 [0.000, 0.000] | 0.000 [0.000, 0.000] |
+| 2 | 0.145 [0.082, 0.222] | 0.087 [0.022, 0.163] |
+| 4 | 0.391 [0.311, 0.474] | 0.514 [0.429, 0.600] |
+| 6 | **0.696** [0.598, 0.795] | **0.700** [0.619, 0.778] |
+
+$L_t$ rises monotonically with depth on both models, and the intervals at adjacent
+depths do not overlap — the depth trend is resolved, not merely suggested.
+Figure 2.
+
+The two models are **not** separated from each other: their intervals overlap at
+depths 4 and 6. That is consistent with §4.3's finding that $L_t$ is a product
+$\pi \cdot x_t$ and therefore not a severity ranking; the fitted $\pi$ values do
+differ (0.91 against 0.68, §5.4), while the net losses coincide. This is exactly
+the case the validation run predicted would arise, and it is reported here as a
+property of the metric rather than as a failure to distinguish the models.
+
+Against the ceiling-level models the separation is total: $L_6 \approx 0.70$
+against $L_t = 0.000$. But that contrast conflates severity with task difficulty
+and is not offered as a model comparison.
 
 ### 5.3 Model-free propagation check
 
-*Table: $\Delta_1$ per model. Figure 7. Confirms propagation independent of
-any parametric assumption.*
+$\Delta_1$ is positive for every model that makes any errors at all: +0.556
+(`llama-3.1-8b-instant`), +0.322 (`allam-2-7b`), +0.880
+(`llama-3.3-70b-versatile`), +1.000 (`gpt-oss-120b`). `qwen3.6-27b` produced no
+errors, so $\Delta_1$ is undefined for it. Figure 7. Propagation is therefore
+confirmed with no parametric assumption whatsoever.
+
+But the check is weaker than it looks here, and §5.4 explains why: the second term
+of $\Delta_1$ is **exactly zero for every model**, so $\Delta_1$ reduces to
+$P(\text{ok} \mid \text{ok})$ and stops being an independent quantity. We report it
+because a positive $\Delta_1$ was pre-registered as the model-free confirmation of
+propagation and it delivers that; we do not treat its magnitude as an independent
+severity measure, because on this task family it is not one.
 
 ### 5.4 Severity and recovery
 
-*Report fitted $\pi$, $r_{\text{syn}}$, $r_{\text{sem}}$ with credible
-intervals (Figures 3a–c), the pi-vs-scale check for H2 (Figure 4), and the
-identifiability diagnostic (posterior correlation) per model, exactly as in
-Section 4.3. State plainly whether real-benchmark arguments (Section 3.4)
-improved identifiability relative to the synthetic-only result, since that
-was flagged as an open question.*
+**Recovery is absent, and this changes the model's structure rather than its
+parameters.** $P(\text{next call correct} \mid \text{current call wrong})$ is
+**exactly 0.000** — over 289 transitions on `llama-3.1-8b-instant` and 195 on
+`allam-2-7b`. Not small: zero. Once a chain leaves the gold trajectory it never
+returns to it. The mechanism is visible in the task: once the carried value is
+wrong, the routing rule applied to that wrong value selects a wrong branch too,
+and nothing in the observation stream ever re-states the correct value, so there
+is no route back that does not require the model to detect the inconsistency and
+recompute. None of these models does.
 
-### 5.5 Error-type composition and depth (H4)
+Three consequences follow.
 
-*Figure 5. Test whether the selection-to-argument error ratio shifts with
-STEP INDEX, not with task depth: pooling every step of a depth-8 task into one
-bin averages away the trend H4 is about, and on the validation suite recovered
-only 26% of a configured span where per-step resolution recovered 75%.*
+First, the three-state recurrence of §3.2 collapses to an **absorbing two-state
+chain** on this task family: with $r_{\text{syn}} = r_{\text{sem}} = 0$ the
+poisoned mass is simply $x_t = 1 - \prod_{j<t} p_j$ and $L_t = \pi \cdot x_t$
+exactly, with no recovery term. The recovery machinery is not mis-estimated here;
+it has nothing to estimate.
 
-**H4 is reported as a suite-level claim, pooled across models, and as
-directional-only per model. This is a power limitation established before the
-run, not after it.** A step index $i$ is populated only by tasks of depth $> i$,
-so per-step error counts fall off sharply with $i$, while cost is driven by
-invocations ($\sum_d n_d \cdot d$) — a deep task buys coverage at more step
-indices and pays proportionally more for it. The two scale together, so
-reallocating the budget toward depth is close to a no-op for per-step coverage:
-an exhaustive search over 47,068 allocations under the fixed invocation ceiling
-found none with a better worst-case number of usable consecutive step indices
-than the allocation already configured (3 of 8, where a share estimated from
-fewer than $\approx$ 30 fresh errors has a standard error above 0.09). Pooled
-across the six models the same allocation clears that threshold at 8 of 8 step
-indices even under the most pessimistic recovery assumption. We therefore report
-the pooled trend as the test of H4, show the per-model rank correlations
-alongside it as directional evidence, and do not claim per-model per-step trends.
+Second, $\Delta_1$ degenerates. Its second term is structurally zero, so
+$\Delta_1 = P(\text{ok} \mid \text{ok})$ and it carries no information beyond the
+conditional-correct rate. It still confirms propagation, but it is no longer an
+independent check and is not presented as one.
+
+Third — and contrary to what the validation run predicted — **identifiability
+improves**. With no recovery rate for severity to trade against, the largest
+posterior correlation between $\pi$ and a recovery rate is **0.54** on real data,
+against 0.84–0.89 on the simulated routing suite. The parametric fit is better
+identified on real models than on the simulated policies built to validate it.
+This is the pre-registered primacy rule working as intended: the divergence is the
+finding, not something to reconcile.
+
+**Zero syntactic errors.** Every one of roughly 1,900 recorded invocations
+executed, and no retry ever fired. A syntactic error is by definition a call that
+fails to execute, so there were none to classify: $f_{\text{syn}} = 0$ and
+$r_{\text{syn}}$ is unmeasurable. The fitted $r_{\text{syn}}$ values in Figure 3b
+are therefore **prior, not posterior**, and are marked as such. This was flagged by
+the same automated check that catches bucketing defects, and verified against raw
+rows before being accepted, because an identical symptom in the simulated suite
+*was* a defect.
+
+**Only two of five $\pi$ estimates are informative**: 0.91 [0.82, 0.98] for
+`llama-3.1-8b-instant` and 0.68 [0.55, 0.82] for `allam-2-7b`. The three
+ceiling-level models produce too few errors to update the prior, and their
+posteriors span almost the entire unit interval; reporting 0.49 for
+`gpt-oss-120b` would be reporting the prior mean back. MCMC diagnostics are
+healthy throughout (max R-hat 1.0019, min ESS 4,044, zero divergences), which says
+the posterior was explored properly and says nothing about whether the data
+constrained it.
+
+### 5.5 Error-type composition along the chain (H4): withdrawn
+
+**H4 is untestable on this task family, and the reason is more informative than a
+power limitation.** Of 302 clean-context errors, **302 are tool-selection errors
+and 0 are argument errors**. The selection-to-argument ratio the hypothesis is
+about is undefined at every step index: there is no mix, so there is no shift in
+the mix to detect. This was verified directly against raw rows for both models
+rather than inferred from the aggregate.
+
+The mechanism is structural. On a routing task a clean-context failure means the
+parity rule was mis-applied — the wrong tool was named. The argument, by contrast,
+is copied verbatim from the previous result stated in the observation, and these
+models essentially never get that wrong *while holding a correct value*. Argument
+errors do occur — 145 of 289 poisoned-context errors name the gold tool while
+carrying a wrong value, because the rule applied to a corrupted value can
+coincidentally land on the right branch — but those are propagated errors, which
+the composition deliberately excludes as not being fresh evidence about what kind
+of error the model makes.
+
+**Power was not the binding constraint, and we checked.** Projected against the
+*measured* per-model accuracies, the allocation yields four contiguous usable step
+bins, enough for a rank correlation to reach $p < 0.05$ at $\rho = -1$. (An earlier
+projection of six bins assumed a uniform 0.50 accuracy across models; correcting it
+for the three ceiling-level models, which contribute almost no errors however many
+tasks they run, drops it to four.) H4 would have been marginally testable on power
+grounds. It fails because one of its two categories does not occur where the
+composition is defined.
+
+**What would be needed.** A task variant whose arguments can be wrong
+*independently of tool choice* — arguments requiring a transformation of the
+carried value rather than a verbatim copy, or multi-argument calls where one field
+can be wrong while the tool is right. That is a task-design change, not a budget
+change, and we state it as the concrete prerequisite rather than as future work.
+
+*The per-step aggregation machinery, and the finding that per-depth pooling
+recovers only 26% of a configured composition span where per-step resolution
+recovers 75%, are retained from the validation run (§4) and remain the right way
+to test H4 on a task family where both categories occur.*
 
 ### 5.6 Function-calling mode ablation
 
@@ -619,12 +770,39 @@ dropping it would cost that axis entirely. Its absence from the calling-mode
 comparison means the ablation's five models span the two scale-within-family
 axes but not the smallest scale point.
 
-### 5.7 Synthetic vs. real agreement
+### 5.7 Simulated vs. real: three divergences, real primary
 
-*Per the pre-registered rule: report whether $L_t$ and the identifiability
-finding from Section 4 replicate on real-benchmark tasks. If they disagree,
-real data is primary and the divergence itself is analyzed (schema
-complexity, argument realism, distractor density).*
+The pre-registered rule makes real data primary on disagreement and treats the
+divergence itself as the object of analysis. There are three, and they are
+substantive rather than quantitative.
+
+**1. Recovery. Simulated 0.05–0.30 by configuration; real exactly 0.** The
+simulated policies were built to have the recovery structure the state model
+assumes, so the validation exercised a channel that does not exist on real models
+here. This is the clearest instance of the general lesson in §4.4 — a simulator
+validates the channels it exercises — showing up in the *parameters* rather than in
+the code.
+
+**2. Identifiability, and it moved in the direction the validation did not
+predict.** Largest $\pi$/recovery posterior correlation: 0.84–0.89 simulated,
+**0.54 real**. §4.3 established that even correctly measured priors could not
+resolve the confound on simulated data; on real data the confound is largely
+absent, because consequence 1 removes the quantity $\pi$ was trading against. The
+method's headline weakness is milder in the setting it was built for than in the
+setting built to test it.
+
+**3. Error composition. Simulated policies produced both error types by
+construction; real models produce one.** At depth 4 the simulated $L_t$ spanned
+[+0.042, +0.169] against a real span of [+0.000, +0.514] — the real suite is far
+more dispersed, because it contains both near-ceiling and heavily-degrading models,
+which no simulated tier was configured to be.
+
+What replicates: the **shape** of the result. $L_t$ rises monotonically with depth,
+$L_1 = 0$ holds exactly, the teacher-forced arm stays flat where the free arm
+degrades, and $L_t$ fails to separate two models whose $\pi$ differ while
+separating those whose $\pi$ differ widely — all four were established on simulated
+data first and all four hold on real models. The estimator transferred; the
+parameter regime did not.
 
 ---
 

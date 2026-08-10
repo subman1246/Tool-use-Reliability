@@ -35,12 +35,39 @@ def _grid_shape(n: int) -> tuple[int, int]:
     return rows, cols
 
 
+def _measured_mask(meta) -> np.ndarray:
+    """True where a (model, depth) cell was actually measured.
+
+    `stats_to_arrays` substitutes a neighbouring depth's value into any degenerate
+    bin so the fit has a complete input array. Those substitutes are placeholders,
+    not measurements, and plotting them draws a p_t curve through depths the sweep
+    never reached -- which is precisely how a figure comes to assert more than the
+    data does. A depth with zero trials has no data at all, so mask on that, and
+    also on the substitution record the runner writes.
+    """
+    tri = np.array(meta["trials"])
+    mask = tri > 0
+    for i, name in enumerate(meta["names"]):
+        rec = (meta.get("substituted_input_depths") or {}).get(name)
+        # newer runs record {"p": [...], "f_syn": [...]}; only the p list is
+        # relevant here. Older runs recorded a single OR-ed list, which over-masks
+        # -- accepted rather than guessed apart, since a placeholder shown as a
+        # measurement is the worse error.
+        bad = rec.get("p", []) if isinstance(rec, dict) else (rec or [])
+        for d in bad:
+            if d in meta["depths"]:
+                mask[i, meta["depths"].index(d)] = False
+    return mask
+
+
 def fig_p_vs_g(meta):
     """p_t (clean baseline) vs g_t (global rate) per model: the propagation gap."""
     depths = meta["depths"]
     names = meta["names"]
-    p = np.array(meta["p"]); succ = np.array(meta["successes"]); tri = np.array(meta["trials"])
+    p = np.array(meta["p"], dtype=float)
+    succ = np.array(meta["successes"]); tri = np.array(meta["trials"])
     g = np.divide(succ, tri, out=np.full_like(succ, np.nan, dtype=float), where=tri > 0)
+    p = np.where(_measured_mask(meta), p, np.nan)
 
     rows, cols = _grid_shape(len(names))
     fig, axes = plt.subplots(rows, cols, figsize=(4.3 * cols, 3.5 * rows), sharey=True)
@@ -49,6 +76,11 @@ def fig_p_vs_g(meta):
         ax.plot(depths, p_row, "o-", color="#333333", label="$p_t$ (clean baseline)")
         ax.plot(depths, g_row, "s-", color=COLORS.get(name, "#1155CC"), label="$g_t$ (free run)")
         ax.fill_between(depths, g_row, p_row, alpha=0.15, color=COLORS.get(name, "#1155CC"))
+        missing = [d for d, ok in zip(depths, ~np.isnan(p_row)) if not ok]
+        if missing:
+            ax.text(0.98, 0.04, f"no data: depth {','.join(map(str, missing))}",
+                    transform=ax.transAxes, ha="right", va="bottom", fontsize=7,
+                    color="#B00020")
         ax.set_title(name, fontsize=10)
         ax.set_xlabel("depth"); ax.set_ylim(0, 1.05)
     for ax in axes[len(names):]:
@@ -64,9 +96,11 @@ def fig_p_vs_g(meta):
 def fig_L_bars(meta):
     """Net propagation loss L_t = 1 - g_t/p_t, by depth, with bootstrap CIs."""
     depths = meta["depths"]; names = meta["names"]
-    p = np.array(meta["p"]); succ = np.array(meta["successes"]); tri = np.array(meta["trials"])
+    p = np.array(meta["p"], dtype=float)
+    succ = np.array(meta["successes"]); tri = np.array(meta["trials"])
     g = np.divide(succ, tri, out=np.full_like(succ, np.nan, dtype=float), where=tri > 0)
-    L = 1 - g / p
+    # same masking as fig1: a bar drawn from a substituted p_t is not a measurement
+    L = np.where(_measured_mask(meta), 1 - g / p, np.nan)
     ci = meta.get("L_ci", {})
 
     x = np.arange(len(depths)); w = 0.13

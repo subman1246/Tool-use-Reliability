@@ -102,7 +102,8 @@ def main():
         stats = aggregate_by_depth(loaded, DEPTHS)
         all_stats[cfg.name] = stats
 
-        p, f_syn, filled = stats_to_arrays(stats)
+        p, f_syn, filled_flags = stats_to_arrays(stats)
+        filled = filled_flags["any"]
         # exact successes/trials from the free-run mean and count (mean is k/n)
         succ = np.array([round(s.g_t * s.n_g) if s.n_g else 0 for s in stats])
         tri = np.array([s.n_g for s in stats])

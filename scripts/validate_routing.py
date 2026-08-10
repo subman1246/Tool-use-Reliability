@@ -168,7 +168,8 @@ def main():
 
         loaded = load_records(path)
         stats = aggregate_by_depth(loaded, DEPTHS)
-        p, f_syn, fl = stats_to_arrays(stats)
+        p, f_syn, fl_flags = stats_to_arrays(stats)
+        fl = fl_flags["any"]
         if any(fl):
             filled_note[name] = [DEPTHS[i] for i, x in enumerate(fl) if x]
             print(f"  note: substituted inputs at depth(s) {filled_note[name]}")
