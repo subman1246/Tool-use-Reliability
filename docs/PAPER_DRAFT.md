@@ -405,26 +405,58 @@ each locked in by a regression test:
 
 ### 4.3 Findings
 
-**The fit-free metric $L_t$ correctly recovers the configured severity
-ordering.** Averaged and at the deepest measured depth, $L_t$ orders
-weak $>$ mid $>$ strong within both simulated families, and — after adding
-bootstrap confidence intervals — the intervals do not overlap between tiers
-within either family at the deepest depth. A model-free lag check
+**$L_t$ measures net propagation loss, and that is not the same thing as a
+severity ranking.** Both facts belong here, next to the numbers, because
+reporting either alone misleads. On the routing suite at depth 8, $L_t$ is
+0.355 [0.322, 0.387] for the policy configured at $\pi = 0.70$, 0.197
+[0.170, 0.226] at $\pi = 0.40$, 0.154 [0.128, 0.182] at $\pi = 0.45$, and
+0.025 [0.010, 0.038] at $\pi = 0.22$ (89% paired-bootstrap intervals). Five of
+the six pairwise comparisons separate with non-overlapping intervals, and every
+pair whose configured $\pi$ differs by at least 0.18 separates. The sixth pair —
+$\pi = 0.45$ against $\pi = 0.40$ — overlaps, and its point estimates are ordered
+against the configured $\pi$.
+
+This is expected rather than anomalous, and it is the single most important thing
+to understand about the metric. $L_t = \pi \cdot x_t$ is a **product**: the
+severity of poisoning multiplied by the poisoned mass accumulated by depth $t$.
+Two models with similar $\pi$ but different error-mix dynamics have different
+$x_t$, so their $L_t$ can order against their $\pi$. The linear suite reproduces
+this independently across families, where the policy configured at $\pi = 0.65$
+has a *higher* $L_8$ (0.383) than the one configured at $\pi = 0.70$ (0.330),
+the two families differing in syntactic share and recovery rates.
+
+So $L_t$ answers "how much reliability is actually lost along a chain of this
+depth" — which is the operationally meaningful question, and which it answers
+without any fitted parameter. It does not answer "which model is intrinsically
+more fragile per unit of corruption." Where models differ mainly in severity,
+the two coincide; where they differ in error composition, they need not. We
+report $L_t$ as the headline for the first question and never read a ranking off
+it for the second.
+
+A model-free lag check
 ($\Delta_1 = P(\text{step } t{+}1 \text{ correct} \mid t \text{ correct}) -
 P(\text{step } t{+}1 \text{ correct} \mid t \text{ wrong})$) is large and
-positive for every model (0.55–0.70), independently confirming that
+positive for every policy (0.59–0.68 on routing), independently confirming that
 propagation is real and detectable without any parametric assumption.
 
 **The parametric severity/recovery fit is not fully identifiable under
 exact-match scoring.** MCMC diagnostics are healthy (max R-hat 1.002, min ESS
-$\approx$ 4350, zero divergences), yet the fitted $\pi$ does not track the
-configured severity ordering as cleanly as $L_t$ does. The posterior
-correlation between $\pi$ and each recovery rate is substantial for every
-model (0.18–0.74), which is the direct diagnostic signature of
-non-identifiability. This is not an artifact of the measurement bugs found in
-Section 4.2: the correlation structure persisted after every one of those
-fixes, which rules out the simplest alternative explanation and supports a
-structural account instead. The mechanism is that under exact-match scoring,
+$\approx$ 3400, zero divergences), yet the fitted $\pi$ does not recover the
+configured values: absolute error is 0.064–0.313 on routing (mean 0.189) and
+0.023–0.385 on linear (mean 0.167). The posterior correlation between $\pi$ and
+at least one recovery rate is substantial for every model — 0.84–0.89 on routing,
+0.22–0.74 on linear — which is the direct diagnostic signature of
+non-identifiability.
+
+This finding was re-examined specifically because it might have been an artifact.
+Section 4.2's fixes made the recovery rates measurable from labelled transitions
+for the first time, and those measured rates now centre the recovery hyperpriors;
+the prior centres land within 0.02 of the configured family means. The natural
+hypothesis was that correct, informative priors would resolve the
+non-identifiability. **They did not.** Fixing the inputs did not change the
+correlation structure, which is what a structural rather than
+mis-specification account predicts, and it rules out the most attractive
+alternative explanation. The mechanism is that under exact-match scoring,
 a step can only be judged globally correct while its context is poisoned if
 it exactly recovers the true value — a merely locally-consistent continuation
 of an already-wrong input essentially never coincidentally matches the fixed
@@ -467,11 +499,36 @@ We therefore scope this section's claim precisely: **it establishes that the
 estimation and aggregation pipeline recovers configured parameters from labelled
 transitions. It does not establish that the prompt-construction and
 observation-passing path is correct**, and no simulation with an out-of-band
-state interface can establish that. Two generalisable points follow: a mock that
-receives state out-of-band cannot validate the channel that state travels
-through, and tests should assert on the artifact sent to the provider rather than
-on backend behaviour, since behavioural assertions inherit the mock's blind spots
-by construction.
+state interface can establish that.
+
+**A simulator validates the channels it exercises, and silently certifies the
+ones it does not.** We state this as a design principle rather than as a list of
+incidents, because it is the transferable contribution of this section and it is
+predictive: it says in advance where to look. Seven defects were found in this
+pipeline, and every one of them is an instance of it — a channel the real
+interface has, which the simulator bypassed, and which therefore reported healthy
+no matter what it did:
+
+| Bypassed channel | What the simulator did instead | What it certified falsely |
+|---|---|---|
+| the conversation itself | received `ref` as a call argument | a free-running loop that appended neither its own call nor the tool result |
+| task difficulty | erred by construction at a configured rate | a linear suite on which real models never err, so nothing propagates |
+| run-mode separation | one policy object served both arms | a teacher-forced baseline poisoned by the free run, giving $L_1 = -0.113$ where it is 0 by construction |
+| the tool namespace | emitted a tool name no task defines | a selection-error share of exactly 0.00 at every step index, making H4 unfalsifiable |
+| branch selection | recovered the value but branched on the corrupted one | a configured recovery of 0.60 observable as 0.179 |
+| the observable error label | kept a hidden corruption origin the logs cannot see | recovery rates biased ~2× toward each other, and hence biased priors |
+| task identity | reused ids across generator seeds | task-grouped statistics merging unrelated trajectories |
+
+Three of these were invisible to *every* assertion the suite made, because the
+suite asserted on rates the simulator itself produced. Two practical rules
+follow. First, tests should assert on the artifact sent to the provider — the
+message list — rather than on backend behaviour, since behavioural assertions
+inherit the mock's blind spots by construction. Second, any quantity the analysis
+derives should be checked against a configured ground truth *through the full
+pipeline*, not against the generator that produced it: four of the seven above
+were found only once a measured value was compared with the value it was
+configured from, and the last one only because the same configuration measured
+0.34 at one seed count and 0.10 at another.
 
 After the defect was fixed, this entire validation run was regenerated and
 compared element-by-element with the pre-fix artifacts. The clean baseline,
@@ -527,15 +584,40 @@ was flagged as an open question.*
 ### 5.5 Error-type composition and depth (H4)
 
 *Figure 5. Test whether the selection-to-argument error ratio shifts with
-depth using real per-depth data (the simulated suite could not test this
-since syntax share was configured flat).*
+STEP INDEX, not with task depth: pooling every step of a depth-8 task into one
+bin averages away the trend H4 is about, and on the validation suite recovered
+only 26% of a configured span where per-step resolution recovered 75%.*
+
+**H4 is reported as a suite-level claim, pooled across models, and as
+directional-only per model. This is a power limitation established before the
+run, not after it.** A step index $i$ is populated only by tasks of depth $> i$,
+so per-step error counts fall off sharply with $i$, while cost is driven by
+invocations ($\sum_d n_d \cdot d$) — a deep task buys coverage at more step
+indices and pays proportionally more for it. The two scale together, so
+reallocating the budget toward depth is close to a no-op for per-step coverage:
+an exhaustive search over 47,068 allocations under the fixed invocation ceiling
+found none with a better worst-case number of usable consecutive step indices
+than the allocation already configured (3 of 8, where a share estimated from
+fewer than $\approx$ 30 fresh errors has a standard error above 0.09). Pooled
+across the six models the same allocation clears that threshold at 8 of 8 step
+indices even under the most pessimistic recovery assumption. We therefore report
+the pooled trend as the test of H4, show the per-model rank correlations
+alongside it as directional evidence, and do not claim per-model per-step trends.
 
 ### 5.6 Function-calling mode ablation
 
 *Native vs. uniform calling mode on a fixed subset, quantifying how much of
 the argument-error rate is a calling-mode artifact rather than a genuine
-model limitation. Report as a covariate-adjusted comparison per Methodology
-Section 6.*
+model limitation. Report as a direct contrast per Methodology Section 6.*
+
+**Scope note: this ablation covers five of the six models.**
+`groq/allam-2-7b` rejects native tool calling outright ("tool calling is not
+supported with this model"), verified before the ablation was run rather than
+discovered during it. It is retained in the main uniform-mode sweep, where it is
+the 7B leg of the family-at-matched-scale axis against `llama-3.1-8b-instant`;
+dropping it would cost that axis entirely. Its absence from the calling-mode
+comparison means the ablation's five models span the two scale-within-family
+axes but not the smallest scale point.
 
 ### 5.7 Synthetic vs. real agreement
 
