@@ -353,6 +353,56 @@ the **pooled suite-level trend is the primary claim**, per-model rho values are 
 because we directly observed the per-model test return a wrong answer on a control whose
 truth we knew.
 
+## One parsing decision would have inverted the suite's reliability ranking
+
+**The suite's most reliable model would have been recorded as its least reliable, entirely as
+a function of one parsing decision.** That sentence is measured, not inferred.
+
+`qwen3.6-27b` wraps every call in an explicit `<think>` block. The parser in place before the
+Phase 4 hardening extracted JSON as `text[first "{" : last "}" + 1]`, which on such a response
+spans from the first brace *inside the reasoning* to the final brace of the actual call,
+swallowing prose in between and yielding invalid JSON.
+
+Rather than reason about the consequence, we replayed every cached raw completion through the
+pre-Phase-4 extractor recovered from version control. Zero API cost -- the cache holds the raw
+text -- and the counterfactual is therefore an observation:
+
+| Model | cached completions | OLD parser failures | CURRENT parser failures | parsed-but-different |
+|---|---|---|---|---|
+| **`qwen/qwen3.6-27b`** | 394 | **319 (81.0%)** | **0 (0.0%)** | 0 |
+| `openai/gpt-oss-120b` | 490 | 2 (0.4%) | 1 (0.2%) | 0 |
+| `llama-3.1-8b-instant` | 1,515 | 0 (0.0%) | 0 (0.0%) | 0 |
+
+**81.0% of qwen's responses would have failed to parse.** A parse failure is scored as a
+syntactic error, so its measured clean baseline would have fallen from $p_t = 1.000$ -- the
+best in the suite, zero errors across 584 invocations -- to roughly 0.19, by far the worst.
+The direction of the result, not its precision, was decided by that one line.
+
+Two details worth keeping. **Zero responses "parsed but differently"**: where the old extractor
+succeeded it returned the same tool and arguments, so the failure mode is clean breakage rather
+than silent corruption -- which is the more dangerous alternative and did not occur. And the
+single residual failure under the current parser, on `gpt-oss-120b`, is a model that replied
+with the literal string `[step 2]`: a genuine model failure, correctly classified as syntactic.
+
+### The companion principle
+
+This is not a tenth artifact. It is the same failure mode as the nine, at a different layer of
+the pipeline, and the two should be read side by side:
+
+> **Simulated validation.** A simulator validates the channels it exercises and silently
+> certifies the ones it does not. Governs what a controlled validation run can establish.
+>
+> **Real-data harness robustness.** A parser, scorer, or any other pre-analysis transform can
+> silently determine the *direction* of a result rather than its precision. Governs what a
+> real run can establish.
+
+Structurally identical: in both cases a component upstream of the analysis decides what the
+analysis is able to see, and reports health regardless. They differ only in which part of the
+pipeline they apply to, and a reader should see them as the same lesson twice rather than as two
+unrelated cautions. The practical consequence is also the same in both cases -- assert on the
+artifact that crosses the boundary (the message list sent to the provider; the raw completion
+returned by it) rather than on quantities computed downstream of it.
+
 ## gpt-oss-20b is a day behind, not broken (checked, because it looked broken)
 
 At one point `gpt-oss-20b` sat at 1 of 128 tasks while every other model was past 75% of
@@ -406,12 +456,44 @@ state it as such -- but it is the most plausible available explanation for the c
 is a concrete prediction for anyone extending this work: reasoning before the call should
 reduce fresh selection errors, which is the dominant error channel here.
 
-**It also came close to inverting a headline.** All 584 of qwen's records show
-`executed = True`, `n_attempts = 1` and `error_type = none`: not one parse failure. That is
-entirely due to the `<think>`-stripping parser and last-balanced-JSON extraction added during
-Phase 4 hardening. Without it, every one of those responses would have failed to parse, and
-the suite's most reliable model would have been recorded as its least reliable -- a harness
-detail deciding the sign of a headline result rather than its precision.
+The near-inversion this created has its own section below, because the number behind it was
+verified rather than predicted.
+
+## Two budget checks prompted by the response-length table
+
+**qwen's output cost is 6.6x what the budget model assumed, and it matters.** The cost model
+charges 40 output tokens per call, which was measured against the bare-JSON responses the rest
+of the suite produces. Real output tokens, counted with `tiktoken` over cached completions:
+
+| Model | median | mean | p90 | assumed |
+|---|---|---|---|---|
+| `qwen/qwen3.6-27b` | 195 | **262.6** | 526 | 40 |
+| `llama-3.1-8b-instant` | 20 | 20.5 | 27 | 40 |
+| `openai/gpt-oss-120b` | 20 | 20.0 | 24 | 40 |
+
+So the assumption is conservative by 2x for the five terse models and wrong by 6.6x for the one
+reasoning model. Correcting qwen's remaining projection specifically: 452 remaining calls at
++223 tokens each is **+100,796 tokens, or +0.6 days** on top of the 4.0 days the shared
+assumption implies -- **4.6 days rather than 4.0**, independent of the refill-rate arithmetic.
+Not a large error, but it is in the direction that matters (under-estimating the slowest thing),
+and it exists only for the model whose completions are long. Any suite mixing reasoning and
+non-reasoning models needs a per-model output-token figure rather than one shared constant.
+
+**No truncation, checked two ways.** A 3,800-character maximum response raises the question of
+whether any completion hit a token ceiling mid-reasoning, which would look like malformed output
+while being a harness configuration fault rather than a model error or a parse failure.
+
+- The harness **never sets `max_tokens`**: the LiteLLM call passes only `model`, `messages`,
+  `temperature` and `timeout`, so no ceiling is imposed on our side.
+- **Zero of qwen's 394 cached completions contain an unclosed `<think>`**, which is what
+  mid-reasoning truncation would produce. The four responses not ending in `}` end in a
+  markdown code fence, and all four parse correctly.
+
+So no truncated completion is being silently counted as `error_type: none` or folded into the
+parse-failure rate. **One honest limitation:** the response cache stores only the completion
+text, not `finish_reason`, so this check is structural rather than authoritative. Storing
+`finish_reason` alongside the text would make it a direct check, and is recommended for any
+replication -- it costs nothing and removes the inference.
 
 ## MoE scale is reported on both axes, because they disagree
 
