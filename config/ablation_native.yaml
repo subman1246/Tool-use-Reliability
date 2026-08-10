@@ -1,0 +1,61 @@
+# PHASE 6: provider-native function calling vs the uniform JSON-in-prompt mode.
+#
+# Purpose. Every correctness figure in the main run is measured through ONE
+# calling convention: a uniform JSON-in-prompt protocol, used so that all models
+# are scored on the same interface regardless of what their provider supports.
+# That uniformity is what makes the family and scale axes comparable, but it also
+# means an argument error might be an artifact of the protocol rather than a
+# genuine limitation. This ablation quantifies how much.
+#
+# Run it as:
+#   py scripts/run_real_suite.py --config config/ablation_native.yaml \
+#       --call-mode native --tag native
+#   py scripts/report_real.py --tag native
+#
+# and compare against the same task prefix from the main run. The tag is distinct
+# so the ablation cannot overwrite the main artifacts.
+#
+# SCOPE: five models, not six. groq/allam-2-7b rejects native tool calling
+# outright ("tool calling is not supported with this model"), verified by direct
+# probe before this ablation was configured rather than discovered during it. It
+# is retained in the main uniform-mode sweep, where it is the 7B leg of the
+# family-at-matched-scale axis; only the calling-mode comparison loses it.
+#
+# DESIGN: a shallower, smaller grid than the main run, deliberately. The question
+# here is whether the calling convention changes how faithfully a single
+# invocation is emitted, which is a per-call property; it is not a question about
+# propagation, so it does not need the deep bins that dominate the token bill.
+# Depths 1 and 4 give a call with no upstream history and a call with a real one.
+# The task ids are a nested prefix of the main run's suite, so every ablation task
+# has an exact uniform-mode counterpart to compare against, task by task.
+task_variant: routing
+
+# no control arm here: the linear null is a property of the task structure, not of
+# the calling convention, and it is already established in the main run
+control_arm: null
+
+depths: [1, 4]
+per_depth: {1: 20, 4: 20}
+
+# ~142k tokens per model under the erring-policy cost model, so this fits inside
+# one day of the 200,000 TPD models rather than competing with the main sweep for
+# a multi-day budget.
+budget_days: 1
+
+distractor_level: 1
+seeds: 1
+feedback: structured
+call_mode: native
+max_retries: 1
+
+models:
+  - {name: "groq/llama-3.1-8b-instant",    family: "llama",   scale: 8,   provider: "groq", rpd: 14400, tpm: 6000,  tpd: 500000}
+  - {name: "groq/llama-3.3-70b-versatile", family: "llama",   scale: 70,  provider: "groq", rpd: 1000,  tpm: 12000, tpd: 100000}
+  - {name: "groq/openai/gpt-oss-20b",      family: "gpt-oss", scale: 20,  active_scale: 3.6, provider: "groq", rpd: 1000, tpm: 8000, tpd: 200000}
+  - {name: "groq/openai/gpt-oss-120b",     family: "gpt-oss", scale: 120, active_scale: 5.1, provider: "groq", rpd: 1000, tpm: 8000, tpd: 200000}
+  - {name: "groq/qwen/qwen3.6-27b",        family: "qwen",    scale: 27,  provider: "groq", rpd: 1000,  tpm: 8000, tpd: 200000}
+  # groq/allam-2-7b deliberately absent -- see SCOPE above
+
+paths:
+  results: data/results
+  cache: data/cache
