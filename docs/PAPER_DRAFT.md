@@ -793,47 +793,63 @@ Against the ceiling-level models the separation is total: $L_6 \approx 0.70$
 against $L_t = 0.000$. But that contrast conflates severity with task difficulty
 and is not offered as a model comparison.
 
-### 5.2a Depth-truncated measurement under-counts propagation, always
+### 5.2a Where in a chain a model errs is a model property, and no aggregate exposes it
 
-A general point about measuring $L_t$ at a fixed maximum depth, which the depth-6 result
-made concrete. **An error on the final step of a chain cannot propagate**: there is no
-downstream call for it to corrupt. It lowers $g_t$ by exactly its own contribution and
-adds nothing to the poisoned mass. So the deepest bin any study measures systematically
-under-states propagation loss, and the bias is largest where chains are shortest.
+This section makes two claims. The first is about measurement: **an error on the final step
+of a chain cannot propagate**, since no downstream call exists for it to corrupt, so it
+lowers $g_t$ by its own contribution and adds nothing to the poisoned mass. Any study
+measuring $L_t$ at a fixed maximum depth therefore under-states propagation loss, most
+severely where chains are shortest. $L_1 = 0$ is not a separate sanity check that the metric
+behaves; it is the **limiting case** of this bias, where every error is terminal by
+construction.
 
-Measured terminal-error share, with the corresponding $L_t$:
+The second claim is about models, and it is the more useful one. The terminal-error share is
+not a constant determined by depth -- it is a **property of the model**, because *where along
+a chain a model makes its errors* varies between models at equal accuracy. And **no aggregate
+metric exposes it.** Two models with identical per-call accuracy, one erring early and one
+erring late, produce different propagation losses and would be ranked differently by $L_t$
+while being equally accurate. The late-erring model looks robust and is not.
 
-| model | depth | errors | terminal | share terminal | $L_t$ |
-|---|---|---|---|---|---|
-| llama-3.1-8b-instant | 1 | 18 | 18 | **1.000** | 0.000 |
-| | 2 | 49 | 35 | 0.714 | 0.145 |
-| | 4 | 165 | 55 | 0.333 | 0.391 |
-| | 6 | 320 | 63 | 0.197 | 0.686 |
-| allam-2-7b | 2 | 78 | 50 | 0.641 | 0.087 |
-| | 6 | 152 | 29 | 0.191 | 0.728 |
-| llama-3.3-70b-versatile | 4 | 7 | 6 | **0.857** | **0.000** |
-| | 6 | 11 | 3 | 0.273 | **+0.140** |
+Measured terminal-error share with 89% intervals, against the $1/d$ that uniformly
+distributed errors would give:
 
-At depth 1 every error is terminal, which is *why* $L_1 = 0$ identically -- it is the
-limiting case of this bias rather than a separate fact. The share then falls roughly as
-$1/d$ and $L_t$ rises against it.
+| model | depth | errors | terminal share | 89% CI | uniform expectation | $L_t$ |
+|---|---|---|---|---|---|---|
+| llama-3.1-8b-instant | 1 | 18 | **1.000** | -- | 1.000 | 0.000 |
+| | 2 | 49 | 0.714 | [0.586, 0.821] | 0.500 | 0.145 |
+| | 4 | 165 | 0.333 | [0.274, 0.397] | 0.250 | 0.391 |
+| | 6 | 320 | 0.197 | [0.162, 0.236] | 0.167 | 0.686 |
+| allam-2-7b | 2 | 78 | 0.641 | [0.542, 0.732] | 0.500 | 0.087 |
+| | 6 | 152 | 0.191 | [0.141, 0.249] | 0.167 | 0.728 |
+| llama-3.3-70b-versatile | 4 | 7 | 0.857 | **[0.488, 0.992]** | 0.250 | 0.000 |
+| | 6 | 11 | 0.273 | [0.088, 0.549] | 0.167 | +0.140 |
 
-**The extreme case is instructive.** `llama-3.3-70b-versatile` had 6 of its 7 depth-4
-errors on the final step -- 0.857, against the 0.25 that uniformly distributed errors
-would give -- because its errors concentrate late, where the context is longest. With
-almost every error terminal there was nothing left to propagate, and $L_4$ came out at
-exactly 0.000. That looked like a model immune to propagation, and it was not: at depth 6,
-where the terminal share falls to 0.273, the same model shows $L_6 = +0.140$. An automated
-check flagged the $p_t = g_t$ identity, we classified it as benign on precisely this
-ground rather than as suite degeneracy, and the next bin confirmed it.
+**The pattern is carried by `llama-3.1-8b-instant` and `allam-2-7b`**, on 49-320 errors per
+cell, where the terminal share sits consistently *above* the uniform expectation at every
+depth and the intervals are narrow enough to say so. That is the load-bearing evidence: both
+models err later in a chain than chance would predict, plausibly because context is longest
+there, and the effect is large at shallow depth (0.714 against 0.500) where it does the most
+damage to $L_t$.
 
-**Consequence for anyone measuring propagation at a fixed depth.** The reported loss is a
-lower bound, tightening as depth grows but never reaching the asymptote, and the shortfall
-depends on *where in the chain a model's errors fall* -- which differs by model. A model
-whose errors cluster late will look more robust than one whose errors cluster early, at
-equal accuracy. Two mitigations are cheap: report the terminal-error share alongside
-$L_t$, so the size of the bias is visible; and read the depth trend rather than any single
-depth, since the trend is what the bias attenuates rather than reverses.
+**`llama-3.3-70b-versatile` is the vivid case but the weak one, and we do not lean on it.**
+Its depth-4 terminal share of 0.857 rests on 6 of 7 errors, with an 89% interval of
+[0.488, 0.992] -- wide enough that it is compatible with anything from "somewhat above
+uniform" to "essentially all terminal". What it does show unambiguously is the consequence:
+with 6 of its 7 errors terminal, $L_4$ came out at exactly 0.000, which reads as a model
+immune to propagation. At depth 6 the same model gives $L_6 = +0.140$. An automated check
+flagged the $p_t = g_t$ identity, we classified it as benign on exactly this ground rather
+than as suite degeneracy, and the next bin confirmed it. Fourteen of its 59 tasks remain, and
+we report the updated interval when they land.
+
+**Consequences for anyone measuring propagation.** The reported loss is a lower bound whose
+shortfall depends on a model-specific quantity, so cross-model comparisons of $L_t$ at a
+fixed depth are confounded by error position. Three mitigations, all cheap: report the
+terminal-error share alongside $L_t$ so the size of the bias is visible; read the depth
+*trend* rather than any single depth, since the bias attenuates the trend rather than
+reversing it; and treat error position as a reportable model characteristic in its own right
+rather than as a nuisance parameter, because a model that fails late in long chains is a
+different engineering problem from one that fails early.
+
 
 ### 5.3 Model-free propagation check
 
