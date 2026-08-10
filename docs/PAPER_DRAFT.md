@@ -28,13 +28,19 @@ teacher-forced baseline declines gently with depth (0.700 → 0.549) while the
 free-running rate collapses (0.700 → 0.167), so that by depth 6 roughly **70% of a
 model's own clean-context capability is lost to its own earlier mistakes**
 (net propagation loss $L_t$ = 0.696 and 0.700, 89% CI widths under 0.20). We
-further find that **recovery does not merely decay — it is absent**:
-$P(\text{next call correct} \mid \text{current call wrong})$ is exactly 0.000 over
-484 transitions, so once a chain leaves its gold trajectory it never returns. That
-collapses the three-state severity/recovery model to an absorbing two-state chain
-and, unexpectedly, *improves* the identifiability that simulated validation had
-flagged as the method's main weakness, because there is no recovery rate left for
-severity to trade against.
+also observe **no recovery at all**:
+$P(\text{next call correct} \mid \text{current call wrong})$ is 0.000, and 0 of 284
+poisoned steps return to an on-track trajectory. We argue this should be read as a
+property of the *measurement*, not of the models. Returning to on-track under
+exact-match scoring means emitting exactly the gold argument, which after divergence
+is information the model has never received and cannot derive, so a model that
+self-corrects often and one that never does produce identical data. The recovery
+parameters are therefore **not identified** rather than measured as zero, the
+three-state model reduces to its absorbing case as a consequence of the scoring
+regime, and — since the simulated policies "recovered" only by reading gold values
+out of band — the recovery channel was never estimable from observable data in any
+version of this study. That names the cause of a non-identifiability we had
+previously only documented.
 
 Two negative results are reported rather than omitted. A hypothesised shift in
 error composition along the chain is **untestable on this task family**, not for
@@ -521,7 +527,7 @@ state interface can establish that.
 **A simulator validates the channels it exercises, and silently certifies the
 ones it does not.** We state this as a design principle rather than as a list of
 incidents, because it is the transferable contribution of this section and it is
-predictive: it says in advance where to look. Seven defects were found in this
+predictive: it says in advance where to look. Nine defects were found in this
 pipeline, and every one of them is an instance of it — a channel the real
 interface has, which the simulator bypassed, and which therefore reported healthy
 no matter what it did:
@@ -535,8 +541,20 @@ no matter what it did:
 | branch selection | recovered the value but branched on the corrupted one | a configured recovery of 0.60 observable as 0.179 |
 | the observable error label | kept a hidden corruption origin the logs cannot see | recovery rates biased ~2× toward each other, and hence biased priors |
 | task identity | reused ids across generator seeds | task-grouped statistics merging unrelated trajectories |
+| the definition of a clean context | compared the value carried IN against the expected ARGUMENT | identical under a copy-argument task, silently wrong under any transform: every clean step would be marked poisoned and $L_t$ made meaningless |
+| recovery itself | recovered by reading the gold output out of band | a recovery channel that cannot exist for a real model, whose priors then informed a fit whose non-identifiability we attributed to statistics |
 
-Three of these were invisible to *every* assertion the suite made, because the
+The last two are the sharpest illustrations of the principle, because neither is a
+coding error. Comparing the carried value against the expected argument is *correct*
+on a copy-argument task and only becomes wrong on a task that can distinguish them:
+the copy variant was masking a definitional error, and it took building a task that
+could tell them apart to expose it. And the simulator's recovery was not a bug at
+all -- it did exactly what it was configured to do -- but it did so through a channel
+no real model has, which means the recovery parameters were never estimable from
+observable data in any version of this study. We had documented that
+non-identifiability across three separate reworkings before identifying its cause.
+
+Three of the nine were invisible to *every* assertion the suite made, because the
 suite asserted on rates the simulator itself produced. Two practical rules
 follow. First, tests should assert on the artifact sent to the provider — the
 message list — rather than on backend behaviour, since behavioural assertions
@@ -667,45 +685,59 @@ severity measure, because on this task family it is not one.
 
 ### 5.4 Severity and recovery
 
-**Recovery is absent, and this changes the model's structure rather than its
-parameters.** $P(\text{next call correct} \mid \text{current call wrong})$ is
-**exactly 0.000** — over 289 transitions on `llama-3.1-8b-instant` and 195 on
-`allam-2-7b`. Not small: zero. Once a chain leaves the gold trajectory it never
-returns to it. The mechanism is visible in the task: once the carried value is
-wrong, the routing rule applied to that wrong value selects a wrong branch too,
-and nothing in the observation stream ever re-states the correct value, so there
-is no route back that does not require the model to detect the inconsistency and
-recompute. None of these models does.
+**Recovery is not observable under exact-match scoring, and that is a scoping
+statement about the method rather than a finding about the models.**
+$P(\text{next call correct} \mid \text{current call wrong})$ is 0.000, and 0 of 284
+poisoned-context steps with a following step returned to an on-track context.
 
-Three consequences follow.
+We initially read this as "these models never recover". That reading is not
+supported by the data, and the reason is decisive. Returning to on-track under
+exact-match scoring requires emitting exactly the gold argument. The gold value at
+step $t$ is the output of a tool whose constants are never exposed to the model, so
+once a chain diverges the gold value is information the model has never received and
+cannot derive. The only route back is coincidence, at $pprox 1/100{,}000$ per
+opportunity, giving an expected 0.0028 coincidental returns over the 284 observed.
+**A model that self-corrects 20% of the time and one that never self-corrects produce
+identical observable data**, because the self-correcting model still cannot emit a
+number it has never seen.
 
-First, the three-state recurrence of §3.2 collapses to an **absorbing two-state
-chain** on this task family: with $r_{\text{syn}} = r_{\text{sem}} = 0$ the
-poisoned mass is simply $x_t = 1 - \prod_{j<t} p_j$ and $L_t = \pi \cdot x_t$
-exactly, with no recovery term. The recovery machinery is not mis-estimated here;
-it has nothing to estimate.
+So $r_{\text{syn}}$ and $r_{\text{sem}}$ are **not identified** here; they are not
+measured as zero. The three-state recurrence of §3.2 reduces to its absorbing special
+case -- $x_t = 1 - \prod_{j<t} p_j$ and $L_t = \pi \cdot x_t$ exactly, with no
+recovery term -- as a consequence of the *scoring regime*, not of model behaviour.
 
-Second, $\Delta_1$ degenerates. Its second term is structurally zero, so
-$\Delta_1 = P(\text{ok} \mid \text{ok})$ and it carries no information beyond the
-conditional-correct rate. It still confirms propagation, but it is no longer an
-independent check and is not presented as one.
+**This explains the identifiability failure across every version of this pipeline,
+including the simulated ones.** The simulated policies did recover, but they
+recovered by reading the gold output directly, i.e. by being handed the true value
+out of band -- exactly the mock-interface channel §4.4 is about. The recovery channel
+was therefore never estimable from observable data in any version of this study, and
+the measured-transition priors of §4.3 were derived from transitions only a simulator
+can produce. §4.3's finding that correct priors still could not resolve the
+$\pi$/recovery confound is not a statistical accident; it follows from the scoring
+regime, and we now name that as the cause.
 
-Third — and contrary to what the validation run predicted — **identifiability
-improves**. With no recovery rate for severity to trade against, the largest
-posterior correlation between $\pi$ and a recovery rate is **0.54** on real data,
-against 0.84–0.89 on the simulated routing suite. The parametric fit is better
-identified on real models than on the simulated policies built to validate it.
-This is the pre-registered primacy rule working as intended: the divergence is the
-finding, not something to reconcile.
+Two consequences stand. First, $\Delta_1$ degenerates: its second term is
+structurally zero, so it equals $P(\text{ok} \mid \text{ok})$ and confirms
+propagation without being an independent severity measure. Second, the *apparent*
+improvement in identifiability on real data -- largest $\pi$/recovery correlation
+0.54 against 0.84--0.89 simulated -- must not be read as the fit working better.
+There is no recovery variation left for $\pi$ to trade against, because recovery
+cannot be observed at all. A parameter that cannot move is not identified; it is
+pinned.
 
-**Zero syntactic errors.** Every one of roughly 1,900 recorded invocations
-executed, and no retry ever fired. A syntactic error is by definition a call that
-fails to execute, so there were none to classify: $f_{\text{syn}} = 0$ and
-$r_{\text{syn}}$ is unmeasurable. The fitted $r_{\text{syn}}$ values in Figure 3b
-are therefore **prior, not posterior**, and are marked as such. This was flagged by
-the same automated check that catches bucketing defects, and verified against raw
-rows before being accepted, because an identical symptom in the simulated suite
-*was* a defect.
+**What would make recovery estimable.** Scoring would have to credit a return to a
+*self-consistent* trajectory rather than the *gold* one -- a model that detects the
+inconsistency, restarts from the seed value stated in the prompt, and proceeds
+consistently. That is a scoring-regime change and it is the prerequisite for the
+recovery half of the state model to be estimable at all.
+
+**Zero syntactic errors.** Every one of roughly 1,900 recorded invocations executed,
+and no retry ever fired. A syntactic error is by definition a call that fails to
+execute, so there were none to classify: $f_{\text{syn}} = 0$. The fitted
+$r_{\text{syn}}$ values in Figure 3b are therefore prior, not posterior, and the
+figure is labelled as such. This was flagged by the same automated check that catches
+bucketing defects, and verified against raw rows before being accepted, because an
+identical symptom in the simulated suite *was* a defect.
 
 **Only two of five $\pi$ estimates are informative**: 0.91 [0.82, 0.98] for
 `llama-3.1-8b-instant` and 0.68 [0.55, 0.82] for `allam-2-7b`. The three

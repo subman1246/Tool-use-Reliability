@@ -231,36 +231,68 @@ the state model, so it is the cleanest possible check that propagation is real.
 $\Delta_1$ is positive for every model with any errors at all, confirming
 propagation with no parametric assumption.
 
-### 4.1 Recovery is not low. It is zero.
+### 4.1 Recovery is UNOBSERVABLE under this scoring, which is not the same as zero
 
-**$P(\text{next step correct} \mid \text{this step wrong}) = 0.000$ exactly**, over
-289 transitions on `llama-3.1-8b-instant` and 195 on `allam-2-7b`. Not a small
-number — zero. Once the chain leaves the gold trajectory it never returns to it.
+The measurement is unambiguous: **P(next step correct | this step wrong) = 0.000**,
+and across all five models **0 of 284** poisoned-context steps that had a following
+step returned to an on-track context. Not one.
 
-Three consequences, and this is the most substantive divergence from the simulated
-validation in the whole study:
+The tempting reading is "these models never recover". That reading is **unsupported**,
+and the distinction matters more than the number does.
 
-1. **$\Delta_1$ degenerates into $P(\text{ok} \mid \text{ok})$.** Its second term is
-   structurally zero on this task, so $\Delta_1$ carries no information beyond the
-   conditional-correct rate. It still confirms propagation, but it is no longer an
-   independent quantity, and it should not be presented as one.
-2. **$r_{\text{sem}}$ is 0 as a measurement, not as an estimate.** The simulated
-   policies were configured with $r_{\text{sem}}$ between 0.05 and 0.30, so the
-   validation suite exercised a recovery channel that real models on this task do
-   not have. The state model's two-channel recovery structure is, empirically,
-   one dead channel and one empty one (see §4.2).
-3. **It improves identifiability rather than harming it.** With no recovery to
-   trade off against, $\pi$ stops being confounded with $r_{\text{sem}}$. The
-   largest posterior correlation between $\pi$ and a recovery rate on real data is
-   **0.54**, against 0.84–0.89 on the simulated routing suite. The parametric fit
-   is better identified on real models than on the simulated policies built to
-   validate it — the opposite of what the validation predicted.
+**Recovery is information-theoretically impossible here once a chain diverges.**
+Under exact-match scoring, returning to on-track requires emitting exactly the gold
+argument. The gold value at step $t$ is the output of a tool whose constants
+(`a`, `b` in `ToolSpec`) are **never exposed to the model** -- the schema shows only
+name, description and parameter types. So after divergence the gold value is
+information the model has never received and cannot derive. The only route back is
+coincidence, at probability $pprox 1/100{,}000$ per opportunity.
 
-Why it happens is visible in the task: once the carried value is wrong, the parity
-rule applied to that wrong value selects a branch that is wrong too, and nothing in
-the observation stream ever re-states the correct value. There is no route back.
-A model would have to detect the inconsistency and recompute, and none of these
-models does.
+Over the 284 observed opportunities the expected number of coincidental returns is
+**0.0028**. Observing zero is therefore almost entirely uninformative: a model that
+genuinely self-corrects 20% of the time and one that never self-corrects produce
+**identical observable data**, because the self-correcting model still cannot emit a
+number it has never seen.
+
+The honest statement is therefore:
+
+> $r_{	ext{syn}}$ and $r_{	ext{sem}}$ are **not identified** under exact-match
+> scoring on this task family. They are not measured as zero -- they are
+> unmeasurable, and the state model reduces to its absorbing special case as a
+> consequence of the scoring regime, not as a finding about model behaviour.
+
+**This explains the identifiability failure across every version of this pipeline,
+including the simulated ones.** The simulated policies did recover -- but they
+recovered by reading `task.gold[step - 1].output`, i.e. by being *handed* the true
+value out of band. That is exactly the mock-interface channel of the design
+principle in the validation section: a real model has no such access. So the
+recovery channel was never estimable from observable data in any version of this
+study, simulated or real, and the priors that were supposed to inform it were
+derived from transitions only the simulator could produce. The earlier finding that
+correctly measured priors still could not resolve the pi/recovery confound is not a
+statistical accident; it follows from the scoring regime.
+
+Two consequences do stand:
+
+1. **$\Delta_1$ degenerates into P(ok | ok).** Its second term is structurally
+   zero, so it carries no information beyond the conditional-correct rate. It still
+   confirms propagation -- what it was pre-registered for -- but it is not an
+   independent severity measure here.
+2. **The apparent improvement in identifiability is an artifact of the same cause.**
+   The largest pi/recovery posterior correlation is 0.54 on real data against
+   0.84-0.89 on simulated routing, and it would be a mistake to read that as the fit
+   working better. There is no recovery variation left for pi to trade against,
+   because recovery cannot be observed at all. A parameter that cannot move is not
+   identified; it is pinned.
+
+**What would make recovery observable.** Scoring would have to credit a return to a
+*self-consistent* trajectory rather than to the *gold* one -- for instance a model
+that detects the inconsistency, restarts from the seed value stated in the prompt,
+and proceeds consistently thereafter. That is a scoring-regime change and it is the
+prerequisite for the recovery half of the state model to be estimable at all. It is
+recorded here because every version of this pipeline has reported
+non-identifiability without naming its cause.
+
 
 ### 4.2 Zero syntactic errors, verified rather than assumed
 
@@ -608,7 +640,7 @@ in that order, with the third category not softened.
 - **A 3–4 point scale curve per family** — no free host offers 3+ sizes of one family.
 
 **One methodological result that is independent of the models measured.** A simulator
-validates the channels it exercises and silently certifies the ones it does not. Seven
+validates the channels it exercises and silently certifies the ones it does not. Nine
 defects in this pipeline were all instances of that one failure mode, three of them
 invisible to every assertion the validation suite made, because the suite asserted on
 rates the simulator itself produced. Two of the real-run "anomalies" here were flagged
