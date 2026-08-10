@@ -138,16 +138,44 @@ def fig_posterior_forest(idata, meta):
         hi = np.percentile(draws, 94.5, axis=0)
         mean = draws.mean(axis=0)
 
+        # A forest plot of an UNINFORMED parameter is visually indistinguishable
+        # from one of a well-constrained posterior: both are a dot with a bar. Two
+        # ways that happens here, and both must be marked on the figure itself
+        # rather than left to the caption, because figures travel without captions.
+        #   - the prior centre was NaN, so the sampler used its weakly informative
+        #     default: nothing in the data touched this parameter at all
+        #   - the interval spans most of the unit range, so the data barely moved it
+        prior_only = False
+        pu = meta.get("priors_used") or {}
+        key = {"r_syn": "r_syn", "r_sem": "r_sem"}.get(var)
+        if key and key in pu:
+            vals = [v for v in pu[key] if v is not None]
+            prior_only = bool(vals) and all(v != v for v in vals)   # all NaN
+        wide = (hi - lo) > 0.60
+
         fig, ax = plt.subplots(figsize=(7, 4))
         y = np.arange(len(names))
         ax.errorbar(mean, y, xerr=[mean - lo, hi - mean], fmt="o",
                    color="#2c3e50", ecolor="#7f8c8d", capsize=3)
+        for i, w in enumerate(wide):
+            if w:
+                ax.plot(mean[i], i, "x", color="#B00020", markersize=11,
+                        markeredgewidth=2, zorder=5)
         ax.set_yticks(y); ax.set_yticklabels(names)
         ax.set_xlabel(var); ax.set_title(f"{title} — posterior mean, 89% CI")
         ax.set_xlim(0, 1)
         ax.grid(axis="x", alpha=0.3)
+        notes = []
+        if prior_only:
+            notes.append("PRIOR, NOT POSTERIOR: no data informs this parameter")
+        if wide.any():
+            notes.append("x = interval spans >0.60 of the range; "
+                         "essentially uninformed")
+        if notes:
+            ax.text(0.5, -0.22, "\n".join(notes), transform=ax.transAxes,
+                    ha="center", va="top", fontsize=8, color="#B00020")
         fig.tight_layout()
-        fig.savefig(f"{FIG_DIR}/{fname}.png", dpi=150)
+        fig.savefig(f"{FIG_DIR}/{fname}.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
 
 
