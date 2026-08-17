@@ -1043,12 +1043,23 @@ and the resulting order matches the reliability order independently established 
 per-model diagnostic of *whether a model performs the task at all*, distinct from how accurately
 it performs it, and it is invisible to any metric aggregated over the conditioning variable.
 
-**One model is anti-correlated with the rule, which is worse than ignoring it.** `allam-2-7b`
-scores −0.182 at $z = -5.2$: it picks the first-listed tool *more* often when the ref is odd
-(0.777) than when even (0.595), so its bias is strongest exactly where it is wrong. Its accuracy
-is 0.595 on even refs against 0.223 on odd. A model that merely ignored the rule would sit near
-0 and score about 0.5 on both. So `allam-2-7b`'s contribution to the suite's propagation loss is
-not "a weak model that errs more"; it is a model not performing the routing task.
+**These are three qualitatively different relationships to the rule, not one spectrum from
+strong to weak.**
+
+*Derives it.* `qwen3.6-27b` scores +1.000 with zero errors across 584 invocations, and emits an
+explicit `<think>` block computing the parity before every call. It is not approximating the rule; it
+evaluates it.
+
+*Weakly follows it.* `llama-3.1-8b-instant` scores +0.149 at $z = +4.8$ -- clearly positive, so it
+does condition on the ref, but it gets the conditional wrong most of the time it matters.
+
+*Is anti-correlated with it.* `allam-2-7b` scores **−0.182** at $z = -5.2$. This is not blindness
+to the conditioning variable: **its position bias is strongest exactly where that bias is wrong.**
+It picks the first-listed tool *more* often when the ref is odd (0.777) than when even (0.595), and
+its accuracy is 0.595 on even refs against 0.223 on odd. A model merely ignoring the rule would
+sit near 0 and score about 0.5 on both; a negative value means the ref is informative about its
+choice in the wrong direction. So its contribution to the suite's propagation loss is not "a weak
+model that errs more" -- it is a model whose tool selection is actively mis-conditioned.
 
 **Why discrimination and not accuracy.** With a fixed presentation order the correct tool for an
 even ref *is* the first-listed tool, so "always picks the first-listed option" and "applies the
@@ -1063,12 +1074,20 @@ replay covering depths 1, 2 and 4. The step records now carry the held value and
 order directly, so the statistic above is computed over all collected data including depth 6, and
 two numbers moved. `allam-2-7b`'s overall first-listed rate is 0.685 rather than ~0.80 and its
 discrimination −0.182 rather than ~0, so the qualitative conclusion strengthens while its
-characterisation as an *unconditional* position bias does not survive. More importantly,
-`llama-3.1-8b-instant`'s parity accuracy asymmetry largely **disappeared**: 0.525/0.742 on the
-shallow subset became 0.562/0.588 on full data. That asymmetry was a property of the subset, not
-of the model. We report the narrower surviving claim -- parity strongly affects rule application
-in one model and weakly or not at all in the others -- and note that the earlier, broader version
-would have survived into print had the statistic not been recomputed on complete data.
+characterisation as an *unconditional* position bias does not survive. More importantly, a claim we had made about
+`llama-3.1-8b-instant` did not survive, and we state the correction rather than only the corrected
+number:
+
+> On depths 1, 2 and 4 that model's rule-application accuracy was 0.525 on even refs against
+> **0.742** on odd -- a large asymmetry, which we attributed to the model. On the complete data
+> including depth 6 it is 0.562 against **0.588**. **The asymmetry was a property of the shallow
+> subset, not of the model.** Its discrimination likewise fell from +0.267 to +0.149, though it
+> remains clearly positive.
+
+The narrower surviving claim is that parity strongly affects rule application in one model and
+weakly or not at all in the others. The earlier, broader version would have reached print had the
+statistic not been recomputed on complete data, which is the reason we report the trajectory of
+the number and not just its endpoint.
 
 
 ### 5.5 Severity and recovery: the fitted posteriors
@@ -1342,16 +1361,26 @@ tool-reliability evaluation design.]*
 ## 7. Limitations
 
 **A recurring methodological hazard, stated first because it is the most transferable item in
-this section.** Three separate problems in this study had one shape: a constant estimated from
+this section.** Three separate problems in this study had one shape: a quantity estimated from
 part of the suite, or assumed for convenience, applied across a suite whose members differ in
-exactly the respect that constant depends on. A single output-token cost (40 per call, measured
-on terse models) hid that one model costs 262.6 and needed 0.6 more days. Treating held-value
-parity as incidental hid that `allam-2-7b` picks the first-listed tool regardless of the ref --
-discrimination 0.041, not applying the rule at all -- while scoring 0.647 where its bias happens
-to be correct. Measuring error composition per task depth hid that models differ in *where along
-a chain* they err, so a model with 0.857 of its errors on terminal steps read as immune to
-propagation. In each case the aggregate did not merely lose precision; it pointed the wrong way,
-or concealed that a model was not performing the task.
+exactly the respect that quantity depends on.
+
+The clearest case is rule-following. Aggregated over the variable the routing rule conditions on,
+four of five models were indistinguishable -- overall first-listed rates of 0.481-0.497,
+consistent with no position bias at all. Split by that variable, the same data resolves from
++1.000 to -0.182, and reveals that one model is *anti*-correlated with the rule rather than blind
+to it. **Discrimination is a per-model diagnostic of whether a model performs the task at all,
+distinct from how accurately it performs it, and it is invisible to any accuracy metric
+aggregated over the conditioning variable.** We give it first because it is the most externally
+validated of the three: the ordering it produces matches the reliability ordering established
+independently from $L_t$ and error counts.
+
+The other two: a single output-token cost (40 per call, measured on terse models) hid that one
+model costs 262.6 and needed 0.6 more days than projected; and measuring error composition per
+task depth hid that models differ in *where along a chain* they err, so a model with 0.857 of its
+errors on terminal steps read as immune to propagation. In each case the aggregate did not merely
+lose precision -- it pointed the wrong way, or concealed that a model was not performing the
+task.
 
 The recommendation generalises beyond this study: **when evaluating a heterogeneous model suite,
 distrust every constant estimated from one model or assumed for convenience, and verify it

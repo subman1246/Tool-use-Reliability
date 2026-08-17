@@ -525,10 +525,27 @@ split is documented rather than papered over.
 Three separate problems in this study have the same shape, and naming the shape once is worth
 more than the three fixes were individually.
 
+**The clearest instance, and the lead example.** Aggregate rule-following looked identical across
+the suite: the overall rate of picking the first-listed tool was 0.481-0.497 for four of five
+models, indistinguishable and consistent with no position bias whatever. Splitting the same data
+by the variable the rule conditions on resolved it from +1.000 to -0.182.
+
+> **Discrimination is a per-model diagnostic of whether a model performs the task at all,
+> distinct from how accurately it performs it, and it is invisible to any accuracy metric
+> aggregated over the conditioning variable.**
+
+This is the most externally validated of the three, which is why it leads: the ordering it
+produces matches the reliability ordering established independently from $L_t$ and error counts
+(`qwen3.6-27b` never errs and scores +1.000; `allam-2-7b` has the largest propagation loss and
+scores -0.182). A statistic recovered from a hidden dimension agreeing with an unrelated
+measurement is much stronger evidence than the statistic alone.
+
+The other two instances have the same structure:
+
 | Shared assumption | What it hid | How it surfaced |
 |---|---|---|
+| Aggregate accuracy over the conditioning variable | Four models indistinguishable at ~0.49; discrimination spans **+1.000 to -0.182**, and `allam-2-7b` is *anti*-correlated with the rule rather than blind to it | splitting accuracy by held-value parity |
 | One output-token constant (40/call), estimated from terse models | `qwen3.6-27b` costs **262.6** tokens per call, 6.6x the constant, so its calendar projection was short by 0.6 days | measuring output tokens per model instead of using the constant |
-| Parity of the held value is incidental, so aggregate accuracy is enough | `allam-2-7b` picks the first-listed tool ~80% of the time regardless of the ref -- discrimination **0.041**, i.e. it is not applying the routing rule at all, while scoring 0.647 on the half of cases where its bias is right | splitting accuracy by the conditioning variable |
 | Error composition measured per task depth | *Where in the chain* each model errs differs by model: `llama-3.3-70b` had **0.857** of its depth-4 errors on the terminal step against 0.250 under uniform, so its $L_4$ read as immunity | resolving by step index and reporting terminal-error share |
 
 In each case a quantity estimated from one part of the suite, or assumed for convenience, was
