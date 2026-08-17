@@ -1563,6 +1563,49 @@ modes are set in `config/default.yaml`.
 linearly with depth (`p_slope`, see `src/tur/harness/sim_policy.py`). All
 other parameters are as defined in Section 3.2.
 
+
+---
+
+## Figures
+
+All figures are generated from the frozen dataset by `python -m tur.analysis.plots --tag real`.
+
+![Figure 1](data/results/figures/fig1_p_vs_g.png)
+
+**Figure 1.** Clean baseline $p_t$ against free-running $g_t$ per model. The shaded gap is the propagation loss. Depths with no data are omitted and annotated rather than interpolated.
+
+![Figure 2](data/results/figures/fig2_Lt_bars.png)
+
+**Figure 2.** Net propagation loss $L_t$ by depth with 89% paired-bootstrap intervals.
+
+![Figure 3a](data/results/figures/fig3a_pi_forest.png)
+
+**Figure 3a.** Fitted severity $\pi$. Crossed markers denote intervals spanning more than 0.60 of the unit range, i.e. essentially uninformed by data. Note that the directly measured value is 1.000 for every model that produced any poisoned step (Section 5.4); these posteriors are shown to demonstrate the discrepancy, not as estimates.
+
+![Figure 3b](data/results/figures/fig3b_rsyn_forest.png)
+
+**Figure 3b.** Fitted syntactic recovery $r_{	ext{syn}}$. Labelled PRIOR, NOT POSTERIOR: no syntactic error occurs anywhere in the dataset, so nothing informs this parameter.
+
+![Figure 3c](data/results/figures/fig3c_rsem_forest.png)
+
+**Figure 3c.** Fitted semantic recovery $r_{	ext{sem}}$. Unidentified for the reason given in Section 5.4.
+
+![Figure 4](data/results/figures/fig4_pi_vs_scale.png)
+
+**Figure 4.** Severity against parameter scale, by family. Two points per family is a signed contrast, not a fitted trend.
+
+![Figure 5](data/results/figures/fig5_error_type_by_depth.png)
+
+**Figure 5.** Error-type composition by depth. The syntactic share is zero throughout, and the argument channel is empty at clean-context steps (Section 5.6).
+
+![Figure 6](data/results/figures/fig6_mcmc_rank.png)
+
+**Figure 6.** MCMC rank plots. Sampling is healthy (max $\hat{R}$ = 1.0014, minimum ESS 5,823, zero divergences), which certifies exploration and is silent on identification.
+
+![Figure 7](data/results/figures/fig7_delta1.png)
+
+**Figure 7.** Model-free propagation check $\Delta_1$ per model.
+
 ## References
 
 Chen et al. (2025). ACEBench: A comprehensive evaluation of tool usage.
