@@ -1,8 +1,9 @@
 # Invocation-Level Reliability of Tool Use in Language Model Agents
 
-*Working draft. Sections marked  contain the exact
-structure to fill in once `scripts/run_real_suite.py` has been run against
-real models; everything else is complete and ready for review/editing.*
+*Complete draft. Every number is measured on a dataset frozen at 14:09 on 2026-08-17; no API
+call was issued after that point and the analysis is a pure function of the frozen files.
+Per-model sample sizes, and the four conditions that were implemented but not executed within
+the project's time constraint, are stated in the Data Collection Note.*
 
 ---
 
@@ -35,7 +36,7 @@ propagation model are determined by the scoring rule rather than by the data.**
 Severity is forced to its boundary -- 0 of 869 poisoned-context steps were correct, in
 every one of the four models that produced any (the fifth never left a clean context,
 leaving its $\pi$ undefined rather than 1) -- and recovery is structurally unobservable:
-0 of 580 poisoned steps returned to an on-track trajectory, against an expected 0.0028
+0 of 580 poisoned steps returned to an on-track trajectory, against an expected 0.0058
 coincidental returns.
 Both follow from one mechanism: a diverged chain holds a value that is not the gold
 one, and the gold value is the output of a tool whose constants the model never sees,
@@ -1138,16 +1139,15 @@ inconsistency, restarts from the seed value stated in the prompt, and proceeds
 consistently. That is a scoring-regime change and it is the prerequisite for the
 recovery half of the state model to be estimable at all.
 
-**Zero syntactic errors.** Every one of roughly 1,900 recorded invocations executed,
-and no retry ever fired. A syntactic error is by definition a call that fails to
+**No syntactic error survives into a scored outcome.** All 5,020 recorded invocations executed, and 10 of them (0.2%) required a second attempt: their first attempt failed to execute and the in-step retry succeeded, so the scored record reflects the successful attempt. Nine were `allam-2-7b` and one `gpt-oss-120b`. A syntactic error is by definition a call that fails to
 execute, so there were none to classify: $f_{\text{syn}} = 0$. The fitted
 $r_{\text{syn}}$ values in Figure 3b are therefore prior, not posterior, and the
 figure is labelled as such. This was flagged by the same automated check that catches
 bucketing defects, and verified against raw rows before being accepted, because an
 identical symptom in the simulated suite *was* a defect.
 
-**Only two of five $\pi$ estimates are informative**: 0.91 [0.82, 0.98] for
-`llama-3.1-8b-instant` and 0.68 [0.55, 0.82] for `allam-2-7b`. The three
+**Only two of five $\pi$ estimates are informative**: 0.92 [0.84, 0.99] for
+`llama-3.1-8b-instant` and 0.73 [0.64, 0.83] for `allam-2-7b`. The three
 ceiling-level models produce too few errors to update the prior, and their
 posteriors span almost the entire unit interval; reporting 0.49 for
 `gpt-oss-120b` would be reporting the prior mean back. MCMC diagnostics are

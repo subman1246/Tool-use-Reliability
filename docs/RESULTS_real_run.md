@@ -332,7 +332,7 @@ information the model has never received and cannot derive. The only route back 
 coincidence, at probability $pprox 1/100{,}000$ per opportunity.
 
 Over the 284 observed opportunities the expected number of coincidental returns is
-**0.0028**. Observing zero is therefore almost entirely uninformative: a model that
+**0.0058**. Observing zero is therefore almost entirely uninformative: a model that
 genuinely self-corrects 20% of the time and one that never self-corrects produce
 **identical observable data**, because the self-correcting model still cannot emit a
 number it has never seen.
@@ -514,19 +514,40 @@ step, so once that condition lands the four cells (ref parity x presentation ord
 without relying on the statistic. Until then, discrimination is the evidence.
 
 
-### 4.2 Zero syntactic errors, verified rather than assumed
+### 4.2 No syntactic error survives into a scored outcome
 
-Across every model, **every single call executed and no retry ever fired** — 1,372
-records on `llama-3.1-8b-instant`, 176 on `llama-3.3-70b-versatile`, 324 on
-`qwen3.6-27b`, and so on, with `executed=True` and `n_attempts=1` throughout. A
-syntactic error is by definition a call that fails to execute, and a retry only
-fires on one, so there were none to classify.
+**Every call executed, and 10 of 5,020 (0.2%) required a retry to do so.** `executed = True`
+holds for all 5,020 records. Ten have `n_attempts = 2`: the first attempt failed to execute and
+the in-step retry then succeeded, so the scored record reflects the successful attempt, which is
+why `error_type` never takes the value `syntactic`.
 
-This was flagged as a structural anomaly ("all errors in one bucket") and checked
-against the raw rows before being accepted, because an identical symptom in the
-simulated suite *was* a bucketing defect. Here it is genuine: these models emit
-well-formed, schema-valid JSON essentially always. The `<think>`-block parser
-handles the reasoning models' output correctly, which is part of why.
+| model | records | retried |
+|---|---|---|
+| `llama-3.1-8b-instant` | 2,028 | 0 |
+| `allam-2-7b` | 1,360 | **9** |
+| `openai/gpt-oss-120b` | 716 | **1** |
+| `qwen/qwen3.6-27b` | 596 | 0 |
+| `llama-3.3-70b-versatile` | 320 | 0 |
+
+So the syntactic channel is not literally empty — it fired ten times, concentrated in one model —
+but **every occurrence was resolved within its own step**, an in-step retry recovery of 10/10.
+That figure rests on ten events and is given for completeness, not as an estimate. It is also a
+different quantity from the state model's $r_{\text{syn}}$, which is the rate at which a
+context *poisoned by a syntactic failure* returns to an on-track chain on a **later** step. No
+context was ever poisoned that way, because no syntactic failure outlived its own step.
+
+This was flagged by an automated check ("all errors in one bucket") and the raw rows were
+inspected before the result was accepted, because an identical symptom in the simulated suite
+*was* a bucketing defect. Here it is genuine: these models emit well-formed, schema-valid JSON
+essentially always, and the `<think>`-block parser handles the reasoning models' output
+correctly, which is part of why.
+
+**This claim was corrected during the final audit.** An earlier version stated that no retry had
+ever fired and cited ~1,900 invocations. Both figures came from a smaller dataset: the frozen set
+has 5,020 records and ten retries. The direction of the finding is unchanged — no syntactic error
+reaches a scored outcome — but the earlier phrasing asserted something stronger than the data
+supports.
+
 
 The consequence is that $f_{\text{syn}} = 0$, $r_{\text{syn}}$ is unmeasurable
 (NaN), and the syntactic half of the state model's recovery structure is empty on
@@ -565,19 +586,19 @@ Posterior means with 89% credible intervals:
 
 | model | $\pi$ | $r_{\text{syn}}$ | $r_{\text{sem}}$ | corr($\pi$, $r_{\text{syn}}$) | corr($\pi$, $r_{\text{sem}}$) |
 |---|---|---|---|---|---|
-| llama-3.1-8b-instant | **0.91 [0.82, 0.98]** | 0.50 [0.10, 0.89] † | 0.06 [0.01, 0.15] | 0.006 | 0.347 |
-| allam-2-7b | **0.68 [0.55, 0.82]** | 0.50 [0.10, 0.90] † | 0.13 [0.01, 0.34] | −0.015 | 0.542 |
-| llama-3.3-70b-versatile | 0.80 [0.35, 0.98] ‡ | 0.50 [0.10, 0.90] † | 0.19 [0.02, 0.64] | −0.015 | 0.000 |
-| gpt-oss-120b | 0.49 [0.05, 0.95] ‡ | 0.51 [0.10, 0.90] † | 0.33 [0.03, 0.83] | 0.015 | 0.020 |
-| qwen3.6-27b | 0.50 [0.05, 0.95] ‡ | 0.50 [0.10, 0.90] † | 0.33 [0.03, 0.82] | 0.009 | 0.011 |
+| llama-3.1-8b-instant | **0.92 [0.84, 0.99]** | 0.50 [0.10, 0.90] † | 0.06 [0.01, 0.13] | −0.002 | 0.611 |
+| allam-2-7b | **0.73 [0.64, 0.83]** | 0.50 [0.10, 0.89] † | 0.08 [0.01, 0.20] | −0.006 | 0.611 |
+| llama-3.3-70b-versatile | 0.89 [0.72, 0.99] ‡ | 0.50 [0.10, 0.89] † | 0.20 [0.01, 0.70] | 0.031 | −0.007 |
+| gpt-oss-120b | 0.74 [0.34, 0.98] ‡ | 0.49 [0.10, 0.90] † | 0.33 [0.02, 0.85] | −0.017 | −0.011 |
+| qwen3.6-27b | 0.49 [0.05, 0.94] ‡ | 0.49 [0.10, 0.90] † | 0.34 [0.02, 0.86] | 0.008 | −0.012 |
 
 † prior, not posterior — no syntactic errors exist to inform it (§4.2).
 ‡ interval spans almost the whole unit range: essentially the prior, because these
-models produced too few errors to inform $\pi$. Reporting 0.49 for `gpt-oss-120b`
+models produced too few errors to inform $\pi$. Reporting 0.49 for `qwen3.6-27b`
 as a severity estimate would be reporting the prior mean back.
 
-**Only two of the five $\pi$ estimates carry information**: 0.91 for
-`llama-3.1-8b-instant` and 0.68 for `allam-2-7b`, both with intervals well inside
+**Only two of the five $\pi$ estimates carry information**: 0.92 for
+`llama-3.1-8b-instant` and 0.73 for `allam-2-7b`, both with intervals well inside
 the unit range. The other three are at ceiling on this task and their posteriors
 are barely updated from the prior. That is a data limitation, stated rather than
 papered over.
@@ -586,9 +607,9 @@ papered over.
 
 | parameter | max R-hat | min ESS |
 |---|---|---|
-| $\pi$ | 1.0008 | 4,044 |
-| $r_{\text{syn}}$ | 1.0004 | 6,192 |
-| $r_{\text{sem}}$ | 1.0019 | 6,371 |
+| $\pi$ | 1.0005 | 5,823 |
+| $r_{\text{syn}}$ | 1.0012 | 5,978 |
+| $r_{\text{sem}}$ | 1.0014 | 5,862 |
 
 Zero divergences. **All diagnostics healthy**, with ESS an order of magnitude above
 target. Note that healthy sampling says the posterior was explored properly; it
@@ -843,7 +864,7 @@ in that order, with the third category not softened.
   over 484 transitions. This is the study's sharpest empirical result and it was not
   anticipated by the simulated validation, which configured recovery at 0.05–0.30.
 - Real models emit well-formed calls essentially always: no syntactic failures in
-  any of the ~1,900 invocations recorded, so the syntactic error channel is empty.
+  any of the 5,020 invocations recorded once the in-step retry is taken into account, so no syntactic error survives into a scored outcome.
 
 **Not supported / unresolved.**
 
