@@ -198,12 +198,12 @@ to propagate to. It has now landed, and it separates them.
 | | **6** | 1.000 | 1.000 | **+0.000** | [+0.000, +0.000] | 66 | 0 |
 
 **`llama-3.3-70b-versatile` leaves the ceiling, and its interval now excludes zero.** Its
-$L_t$ moves from exactly 0.000 at depth 4 to **+0.172 [+0.049, +0.339]** at depth 6 -- the
+$L_t$ moves from exactly 0.000 at depth 4 to **+0.190 [+0.062, +0.345]** at depth 6 -- the
 first propagation loss *established* in a large model here, rather than merely suggested.
 
 This is an update to an earlier reading, and it went the way the earlier reading allowed.
 With 8 depth-6 tasks the estimate was +0.140 [+0.000, +0.362], reported as suggestive because
-the lower bound touched zero. Three further tasks ($n_g$ 48 to 66) moved it to +0.172 with a
+the lower bound touched zero. Three further tasks ($n_g$ 48 to 66) moved it to +0.190 with a
 lower bound of +0.049. The new point estimate lies **inside** the previously reported
 interval, so this is confirmatory rather than a revision -- the interval did its job. This is the outcome the anomaly detector's "benign" classification predicted: at
 depth 4 every one of its errors fell on the final step of the chain, where nothing
@@ -228,9 +228,9 @@ reported as an estimate.
 **(a) Propagation is large, monotone in depth, and cleanly measured on the small
 models.** On `llama-3.1-8b-instant`, $p_t$ falls gently with depth (0.700 → 0.549,
 a 22% relative decline attributable to context growth) while $g_t$ collapses
-(0.700 → 0.167, a 76% decline). $L_t$ rises monotonically to **0.696**: at depth 6,
+(0.700 → 0.167, a 76% decline). $L_t$ rises monotonically to **0.686**: at depth 6,
 roughly 70% of the model's own clean-context capability is lost to its own earlier
-mistakes. `allam-2-7b` behaves the same way, reaching $L_t$ = 0.700. This is the
+mistakes. `allam-2-7b` behaves the same way, reaching $L_t$ = 0.684. This is the
 separation the study was built to make — context-length degradation and error
 propagation pulled apart — and the intervals are tight enough to carry it.
 
@@ -290,7 +290,7 @@ variant's distractors rather than weaker. The arms therefore differ in schema
 composition as well as in routing, so selection-error rates are **not** comparable
 across them, and the control arm is used only as an $L_t$ null.
 
-*[PENDING: table.]*
+**NOT RUN.** The linear control arm was implemented and is sequenced after the primary arm for each model; every model exhausted its token allowance on the primary arm first, so no control data exists. This is the most consequential of the four unexecuted conditions (Section 0) and its absence is stated there rather than implied by an empty table.
 
 ---
 
@@ -380,7 +380,7 @@ non-identifiability without naming its cause.
 ### 4.1a Severity is pinned by the same mechanism, and the fix un-pins it
 
 $\pi$ is defined by $P(\text{ok} \mid \text{poisoned}) = (1-\pi) P(\text{ok} \mid \text{clean})$, so
-it is a ratio of two directly observable rates and needs no fit. Measured: **0 of 683
+it is a ratio of two directly observable rates and needs no fit. Measured: **0 of 869
 poisoned-context steps correct**, hence $\pi = 1.000$.
 
 Per-model, because pooled zero and per-model zero are different claims:
@@ -623,7 +623,7 @@ as such.
 | | 8B | 70B |
 |---|---|---|
 | $\pi$ | 0.908 | 0.805 |
-| $L_t$ | +0.696 at depth 6 | +0.000 at depth 4 |
+| $L_t$ | +0.686 at depth 6 | +0.000 at depth 4 |
 
 $\Delta\pi = -0.104$ in the direction H2 predicts. **But this contrast is not yet
 interpretable**, for two reasons that must be stated rather than absorbed: the 70B
@@ -750,7 +750,7 @@ task.
 mixed-effects logistic regression with calling mode as a covariate; that was never
 implemented and the claim has been withdrawn rather than approximated.
 
-*[PENDING.]*
+**NOT RUN.** Provider-native tool calling was probe-verified as working on five of the six models before the ablation was configured (`allam-2-7b` returns "tool calling is not supported with this model"), and `config/ablation_native.yaml` specifies the run. It was not executed within the time constraint, so **no claim is made about how much of any model's measured unreliability is a calling-mode artifact rather than a genuine limitation.**
 
 ---
 
@@ -832,7 +832,7 @@ in that order, with the third category not softened.
 **Supported by the data so far.**
 
 - Error propagation in tool-use chains is large and monotone in depth on both small
-  models: $L_t$ reaches **0.696** and **0.700** at depth 6, i.e. roughly 70% of
+  models: $L_t$ reaches **0.686** and **0.700** at depth 6, i.e. roughly 70% of
   clean-context capability lost to the model's own earlier mistakes. The
   teacher-forced baseline declines far more gently over the same range, so this is
   not context-length degradation.

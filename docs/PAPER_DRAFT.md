@@ -776,7 +776,7 @@ pending the deeper bins.
 | 1 | 0.000 [0.000, 0.000] | 0.000 [0.000, 0.000] |
 | 2 | 0.145 [0.082, 0.222] | 0.087 [0.022, 0.163] |
 | 4 | 0.391 [0.311, 0.474] | 0.514 [0.429, 0.600] |
-| 6 | **0.696** [0.598, 0.795] | **0.700** [0.619, 0.778] |
+| 6 | **0.686** [0.598, 0.795] | **0.700** [0.619, 0.778] |
 
 $L_t$ rises monotonically with depth on both models, and the intervals at adjacent
 depths do not overlap — the depth trend is resolved, not merely suggested.
@@ -880,7 +880,7 @@ measurement rather than about the models we happened to measure.
 
 **Severity is forced to its boundary.** $\pi$ is defined so that correctness under a
 poisoned context is $(1-\pi)p_t$, making $\pi$ a ratio of two directly observable
-conditional rates that needs no fit at all. Measured: **0 of 683 poisoned-context steps
+conditional rates that needs no fit at all. Measured: **0 of 869 poisoned-context steps
 were correct**, so $\pi = 1.000$.
 
 Pooled zero and per-model zero are different claims, so we state both. Every model that
@@ -928,7 +928,7 @@ with **no free parameters at all**. The state model is not merely non-identifiab
 here; it is an identity in the measured per-step rates, and $L_t$ reduces to "the
 probability the chain has already erred". The three-parameter fit is therefore
 redundant on this data — and worse, it is *misleading*: it reports posterior means of
-0.93 and 0.73 for a quantity that is exactly 1.000, because it fits a smooth
+0.92 and 0.73 for a quantity that is exactly 1.000, because it fits a smooth
 recurrence to depth-pooled aggregates under a prior centred at 0.5. We report the
 directly measured values as primary and the posteriors only to show the discrepancy.
 
@@ -1094,7 +1094,7 @@ the number and not just its endpoint.
 
 **Recovery is not observable under exact-match scoring, and that is a scoping
 statement about the method rather than a finding about the models.**
-$P(\text{next call correct} \mid \text{current call wrong})$ is 0.000, and 0 of 284
+$P(\text{next call correct} \mid \text{current call wrong})$ is 0.000, and 0 of 580
 poisoned-context steps with a following step returned to an on-track context.
 
 We initially read this as "these models never recover". That reading is not
