@@ -38,6 +38,15 @@ every one of the four models that produced any (the fifth never left a clean con
 leaving its $\pi$ undefined rather than 1) -- and recovery is structurally unobservable:
 0 of 580 poisoned steps returned to an on-track trajectory, against an expected 0.0058
 coincidental returns.
+
+*Footnote on a corrected figure.* An earlier draft gave this expectation as 0.0058 where the
+number of opportunities was smaller. The change from 0.0028 to 0.0058 is **entirely an $n$
+correction**: the per-opportunity probability is $1/100{,}000$ throughout — the size of the value
+space the model would have to hit by chance — and only the count of poisoned steps with a
+successor changed, from 284 in an interim dataset to 580 in the frozen one.
+$284/100{,}000 = 0.0028$ and $580/100{,}000 = 0.0058$. No probability was re-estimated and no
+model of the mechanism changed.
+
 Both follow from one mechanism: a diverged chain holds a value that is not the gold
 one, and the gold value is the output of a tool whose constants the model never sees,
 so it is information the model has never received and cannot derive. A model that
@@ -1360,10 +1369,34 @@ tool-reliability evaluation design.]*
 
 ## Notes on completeness
 
-**Citations.** Full citation verification is in progress; load-bearing citations — those where the
-text attributes a specific finding to a work rather than citing it as background — have been
-checked. `docs/CITATIONS_AUDIT.md` carries the per-citation checklist and is explicitly marked
-unverified for the remainder.
+**Citations: 14 of 16 are unverified, and 13 of those carry a load-bearing claim.** We state this
+in the paper rather than only in the audit file, because a reader is entitled to know which
+attributions have been checked against the source and which have not.
+
+The draft cites **16 distinct works**. Fifteen are load-bearing, meaning the text attributes a
+specific finding, method or result to them rather than naming them as background. **Two have been
+verified against the source** — author list, year, venue, and that the work makes the claim
+attributed to it:
+
+- Maekawa et al. 2025, FuncBenchGen (arXiv:2509.26553) — contamination-free multi-step function
+  calling over dependency DAGs, with state-tracking diagnostics. Verified.
+- Healy et al. 2026 (arXiv:2601.05214, AAAI 2026 TrustAgent Workshop) — detection of tool-calling
+  hallucinations from internal representations. Verified.
+
+**The remaining thirteen load-bearing citations are unverified:** Schick et al. 2023,
+Yao et al. 2023 (ReAct), Shinn et al. 2023, Patil et al. 2023 (Gorilla), Li et al. 2023
+(API-Bank), Qin et al. 2024 (ToolLLM), Guo et al. 2024 (StableToolBench), Yao et al. 2024
+(tau-bench), Ye et al. 2024 (RoTBench), Lin et al. 2024 (Hammer), Patil, Yan et al. 2025 (BFCL),
+Wang et al. 2025 (MTU-Bench), and Xu et al. 2025 (Relign). Each is cited for a claim we believe
+correct from reading at the time, but none has been re-checked line-by-line against the published
+version for this draft. `docs/CITATIONS_AUDIT.md` holds the per-citation checklist, including the
+specific sentence each work is asked to support.
+
+One methodological note from building that audit: automated extraction is a floor and needs manual
+cross-validation. A regex pass over parenthetical citations reported three works as
+discussed-but-uncited, which would have been a real defect; they were cited, and the pattern had
+failed on citations wrapped across line breaks. Acting on that output would have duplicated three
+citations while fixing nothing.
 
 **Adversarial review.** A full adversarial review pass has not been completed. One is recommended
 before any resubmission or camera-ready deadline.

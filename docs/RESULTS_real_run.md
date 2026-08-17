@@ -337,6 +337,13 @@ genuinely self-corrects 20% of the time and one that never self-corrects produce
 **identical observable data**, because the self-correcting model still cannot emit a
 number it has never seen.
 
+*Footnote on a corrected figure.* An earlier draft gave this expectation as 0.0028. The change
+is **entirely an $n$ correction**: the per-opportunity probability is $1/100{,}000$ throughout —
+the size of the value space a model would have to hit by chance — and only the count of poisoned
+steps with a successor changed, from 284 in an interim dataset to 580 in the frozen one.
+$284/100{,}000 = 0.0028$ and $580/100{,}000 = 0.0058$. No probability was re-estimated and
+nothing about the mechanism changed.
+
 The honest statement is therefore:
 
 > $r_{\text{syn}}$ and $r_{\text{sem}}$ are **not identified** under exact-match
