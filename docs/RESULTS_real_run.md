@@ -16,6 +16,47 @@ over from the validation run.
 
 ---
 
+## 0. Data freeze and the dataset actually collected
+
+All figures in this document come from a dataset **frozen at 14:09 on 2026-08-17**. No API call
+was issued after that moment. `scripts/final_analysis.py` constructs no backend, so the analysis
+is a pure function of the frozen files and cannot have extended the dataset. Nothing here is
+extrapolated, imputed, or adjusted to compensate for a thin sample; where $n$ is small the
+interval is wide and printed as such.
+
+### Per-model sample sizes at the freeze
+
+| Model | tasks | d1 | d2 | d4 | d6 | d8 | status |
+|---|---|---|---|---|---|---|---|
+| `llama-3.1-8b-instant` | **273** | 60 | 60 | 65 | 65 | 23 | usable; only model reaching depth 8 |
+| `allam-2-7b` | **225** | 60 | 60 | 65 | 40 | — | usable |
+| `openai/gpt-oss-120b` | **108** | 26 | 26 | 28 | 28 | — | usable |
+| `qwen/qwen3.6-27b` | **98** | 26 | 26 | 28 | 18 | — | usable |
+| `llama-3.3-70b-versatile` | **49** | 12 | 12 | 13 | 12 | — | usable but thin |
+| `openai/gpt-oss-20b` | **0** | — | — | — | — | — | **data-insufficient, excluded** |
+
+`gpt-oss-20b` completed no tasks: pilot runs earlier the same day consumed 199,895 of its 200,000
+daily tokens, so it began the sweep a full day's allowance behind and never closed the gap. It is
+excluded from every per-model claim and retained as an attempted entry, because the cause is a
+reproducibility finding in its own right — **a pilot spends the same allowance as the real run**,
+invisibly, since the pilot costs minutes of wall clock and the cost lands in the next day's quota.
+
+### Conditions designed but not executed
+
+| condition | status | consequence for this paper |
+|---|---|---|
+| Linear control arm | implemented, not run | the $L_t pprox 0$ null showing the propagation signal comes from task structure rather than from the harness is **absent** |
+| Transformed-argument condition | implemented and validated able to recover a known trend, not run | H4 remains untestable; the scope caveat on the conditional-scoring decomposition is unresolved |
+| Presentation-order control | implemented and verified inert, not run | the parity confound is addressed by the discrimination statistic only, not removed |
+| Calling-mode ablation | designed, native mode probe-verified on 5 of 6 models, not run | no claim is made about how much measured unreliability is a calling-mode artifact |
+
+The missing linear control is the most consequential, and we name it rather than let its absence
+pass: without it, the claim that propagation arises from task structure rests on the routing arm's
+internal evidence — the flat teacher-forced profile, $L_1 = 0$ exactly, and the step-index
+divergence between arms — rather than on a direct null.
+
+---
+
 ## 1. Setup
 
 | | |
@@ -115,7 +156,8 @@ backing that cell. Empty cells are depths the sweep has not yet reached.
 | 1 | 0.700 | 0.700 | **0.000** | [+0.000, +0.000] | 60 | 18 |
 | 2 | 0.692 | 0.592 | 0.145 | [+0.082, +0.222] | 120 | 35 |
 | 4 | 0.600 | 0.365 | 0.391 | [+0.311, +0.474] | 260 | 55 |
-| 6 | 0.549 | 0.167 | **0.696** | [+0.598, +0.795] | 246 | 40 |
+| 6 | 0.572 | 0.179 | **0.686** | [+0.607, +0.766] | 390 | 63 |
+| 8 | 0.543 | 0.174 | **0.680** | [+0.574, +0.772] | 184 | 23 |
 
 **`allam-2-7b`** (achieved n: 60/60/65/6)
 
@@ -124,7 +166,7 @@ backing that cell. Empty cells are depths the sweep has not yet reached.
 | 1 | 0.533 | 0.533 | **0.000** | [+0.000, +0.000] | 60 | 28 |
 | 2 | 0.383 | 0.350 | 0.087 | [+0.022, +0.163] | 120 | 50 |
 | 4 | 0.427 | 0.208 | 0.514 | [+0.429, +0.600] | 260 | 63 |
-| 6 | 0.556 | 0.167 | **0.700** | [+0.619, +0.778] | 36 | 6 |
+| 6 | 0.475 | 0.150 | **0.684** | [+0.624, +0.745] | 240 | 40 |
 
 **`llama-3.3-70b-versatile`** (achieved n: 12/12/13) — $p_t$ = 1.000, 1.000, 0.865;
 $g_t$ identical; $L_t$ = 0.000 at all three depths.
@@ -149,7 +191,7 @@ to propagate to. It has now landed, and it separates them.
 | model | depth | $p_t$ | $g_t$ | $L_t$ | 89% CI | $n_g$ | fresh errors |
 |---|---|---|---|---|---|---|---|
 | llama-3.3-70b-versatile | 4 | 0.865 | 0.865 | +0.000 | [+0.000, +0.000] | 52 | 6 |
-| | **6** | 0.879 | 0.727 | **+0.172** | **[+0.049, +0.339]** | 66 | 5 |
+| | **6** | 0.875 | 0.708 | **+0.190** | **[+0.062, +0.345]** | 72 | 6 |
 | gpt-oss-120b | 4 | 0.991 | 0.964 | +0.027 | [+0.000, +0.083] | 112 | 1 |
 | | **6** | 0.991 | 0.947 | **+0.044** | [+0.000, +0.135] | 114 | 1 |
 | qwen3.6-27b | 4 | 1.000 | 1.000 | +0.000 | [+0.000, +0.000] | 112 | 0 |
@@ -175,7 +217,7 @@ touching zero. Directionally consistent with propagation; not distinguishable fr
 null at this $n$.
 
 **`qwen3.6-27b` remains at ceiling, and is reported as such.** $p_t = g_t = 1.000$ at
-every depth reached, **zero errors across 256 free-arm steps**, and therefore **zero
+every depth reached, **zero errors across 298 free-arm steps**, and therefore **zero
 poisoned-context steps**. Its severity is undefined (see below) and its $L_t$ is 0
 because there is nothing to propagate, not because propagation was resisted. The fitted
 posterior of 0.501 for this model is the prior mean returned unchanged and is not
@@ -275,7 +317,7 @@ propagation with no parametric assumption.
 ### 4.1 Recovery is UNOBSERVABLE under this scoring, which is not the same as zero
 
 The measurement is unambiguous: **P(next step correct | this step wrong) = 0.000**,
-and across all five models **0 of 284** poisoned-context steps that had a following
+and across all five models **0 of 580** poisoned-context steps that had a following
 step returned to an on-track context. Not one.
 
 The tempting reading is "these models never recover". That reading is **unsupported**,
@@ -345,9 +387,9 @@ Per-model, because pooled zero and per-model zero are different claims:
 
 | model | poisoned steps | successes | 95% upper bound |
 |---|---|---|---|
-| llama-3.1-8b-instant | 397 | 0 | 0.0075 |
-| allam-2-7b | 269 | 0 | 0.0111 |
-| llama-3.3-70b-versatile | 9 | 0 | 0.283 |
+| llama-3.1-8b-instant | 510 | 0 | 0.0059 |
+| allam-2-7b | 335 | 0 | 0.0089 |
+| llama-3.3-70b-versatile | 16 | 0 | 0.171 |
 | gpt-oss-120b | 8 | 0 | 0.312 |
 | qwen3.6-27b | 0 | -- | **undefined** |
 
@@ -394,7 +436,7 @@ so the argument channel can fail on competence grounds.
 
 #### An undefined severity is the correct output, not a gap
 
-`qwen3.6-27b` produced **zero** poisoned-context steps across 256 free-arm steps spanning
+`qwen3.6-27b` produced **zero** poisoned-context steps across 298 free-arm steps spanning
 depths 1, 2, 4 and 6: it never once carried a wrong value forward, and the depth-6 bin --
 the first where propagation is structurally possible -- did not change that. Its severity is therefore **undefined** -- not zero, and
 not small. There is no conditional rate to form, because the conditioning event never
@@ -423,11 +465,11 @@ rule perfectly, and a negative value means it is anti-correlated with the rule.
 
 | model | $n$ | first-listed, overall | ref even | ref odd | **discrimination** | SE | $z$ |
 |---|---|---|---|---|---|---|---|
-| `qwen3.6-27b` | 292 | 0.497 | 1.000 | 0.000 | **+1.000** | 0.000 | — |
-| `openai/gpt-oss-120b` | 352 | 0.486 | 0.983 | 0.006 | **+0.977** | 0.011 | +85.8 |
-| `llama-3.3-70b-versatile` | 154 | 0.481 | 0.886 | 0.053 | **+0.833** | 0.044 | +18.9 |
-| `llama-3.1-8b-instant` | 990 | 0.487 | 0.562 | 0.412 | **+0.149** | 0.031 | +4.8 |
-| `allam-2-7b` | 674 | 0.685 | 0.595 | 0.777 | **−0.182** | 0.035 | **−5.2** |
+| `qwen3.6-27b` | 298 | 0.497 | 1.000 | 0.000 | **+1.000** | 0.000 | — |
+| `openai/gpt-oss-120b` | 358 | 0.492 | 0.983 | 0.006 | **+0.978** | 0.011 | +87.9 |
+| `llama-3.3-70b-versatile` | 160 | 0.481 | 0.880 | 0.052 | **+0.828** | 0.044 | +18.9 |
+| `llama-3.1-8b-instant` | 1,014 | 0.478 | 0.551 | 0.406 | **+0.146** | 0.031 | +4.7 |
+| `allam-2-7b` | 680 | 0.685 | 0.597 | 0.774 | **−0.176** | 0.035 | **−5.0** |
 
 **Discrimination orders the suite, and the aggregate does not.** The overall first-listed rate
 is 0.481–0.497 for four of the five models -- indistinguishable, and consistent with no
@@ -437,7 +479,7 @@ the quantity of interest, and splitting by it recovers a clean ordering that mat
 reliability ordering (`qwen` never errs; `allam` has the largest $L_t$).
 
 **`allam-2-7b` is anti-correlated with the rule, which is worse than ignoring it.**
-Discrimination −0.182 at $z = -5.2$: it picks the first-listed tool *more* often when the ref is
+Discrimination −0.176 at $z = -5.0$: it picks the first-listed tool *more* often when the ref is
 odd (0.777) than when it is even (0.595), so its bias is strongest exactly where it is wrong.
 Its accuracy split reflects this -- 0.595 on even refs against **0.223** on odd. A model that
 merely ignored the rule would sit near 0 and score ~0.5 on both.
@@ -771,6 +813,16 @@ sequenced after the primary arm and every model exhausted its allowance first �
 §3 is empty, which is a real gap rather than a null result.
 
 ---
+
+### An operational failure worth recording
+
+The collection driver's run window expired and **was not relaunched for six days**, during which
+no data was collected. The caps refill continuously but **cap at their daily ceiling**, so the idle
+period banked nothing — it lost roughly six days of throughput. Had that time been used, the
+transformed-argument and control conditions would in all likelihood have been collected, and this
+document would report them. The failure was an assumption on our part that a resumable driver was
+still running, rather than a checked fact; it is the same shape of error this project repeatedly
+found elsewhere, applied to our own process.
 
 ## 10. Interim summary
 

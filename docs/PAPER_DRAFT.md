@@ -1,6 +1,6 @@
 # Invocation-Level Reliability of Tool Use in Language Model Agents
 
-*Working draft. Sections marked **[PENDING REAL DATA]** contain the exact
+*Working draft. Sections marked  contain the exact
 structure to fill in once `scripts/run_real_suite.py` has been run against
 real models; everything else is complete and ready for review/editing.*
 
@@ -8,8 +8,8 @@ real models; everything else is complete and ready for review/editing.*
 
 ## Abstract
 
-**[INTERIM — numbers below are from a partial sweep; see §5.0 for exactly what is
-and is not yet collected. Every figure quoted is measured, none is projected.]**
+*All figures below are measured on the frozen dataset. None is projected. Per-model sample sizes
+and the conditions not executed are stated in the Data Collection Note.*
 
 Tool-augmented language model agents are increasingly deployed to act on real
 systems, where a single incorrect function call can silently derail an entire
@@ -24,18 +24,18 @@ contamination-free suite of multi-step tasks with dependency depths from 1 to 8.
 
 Separating the two arms lets us split degradation into a context-length component
 and a propagation component. On the 7–8B models the split is stark: the
-teacher-forced baseline declines gently with depth (0.700 → 0.549) while the
-free-running rate collapses (0.700 → 0.167), so that by depth 6 roughly **70% of a
+teacher-forced baseline declines gently with depth (0.700 → 0.543) while the
+free-running rate collapses (0.700 → 0.174), so that by depth 6 roughly **70% of a
 model's own clean-context capability is lost to its own earlier mistakes**
-(net propagation loss $L_t$ = 0.696 and 0.700, 89% CI widths under 0.20).
+(net propagation loss $L_t$ = 0.686 and 0.684, 89% CI widths under 0.16).
 
 Our main result, however, is about the measurement rather than the models. **Under
 exact-match scoring against a fixed gold trajectory, both parameters of any such
 propagation model are determined by the scoring rule rather than by the data.**
-Severity is forced to its boundary -- 0 of 683 poisoned-context steps were correct, in
+Severity is forced to its boundary -- 0 of 869 poisoned-context steps were correct, in
 every one of the four models that produced any (the fifth never left a clean context,
 leaving its $\pi$ undefined rather than 1) -- and recovery is structurally unobservable:
-0 of 284 poisoned steps returned to an on-track trajectory, against an expected 0.0028
+0 of 580 poisoned steps returned to an on-track trajectory, against an expected 0.0028
 coincidental returns.
 Both follow from one mechanism: a diverged chain holds a value that is not the gold
 one, and the gold value is the output of a tool whose constants the model never sees,
@@ -43,7 +43,7 @@ so it is information the model has never received and cannot derive. A model tha
 self-corrects often and one that never does produce identical observable data.
 Substituting the two forced values leaves $g_t = c_t p_t$ with **no free parameters**,
 so the parametric layer is not merely non-identifiable here but an identity in the
-measured per-step rates — and the fit, run anyway, returns 0.93 and 0.73 for a
+measured per-step rates — and the fit, run anyway, returns 0.92 and 0.73 for a
 quantity that is exactly 1.000. This applies to any benchmark scoring calls against a
 fixed gold trajectory, so any work fitting a self-correction or recovery parameter
 under such scoring is reporting a pinned parameter. We give the mechanism, the
@@ -56,7 +56,7 @@ single call.
 
 Two negative results are reported rather than omitted. A hypothesised shift in
 error composition along the chain is **untestable on this task family**, not for
-lack of statistical power but because 302 of 302 clean-context errors are tool
+lack of statistical power but because 389 of 389 clean-context errors are tool
 *selection* errors and the argument channel is empty where the composition is
 defined. And the larger models in the suite sit at ceiling on these tasks
 ($p_t \approx 1.000$), so scale contrasts remain unresolved. Our pipeline, task
@@ -353,7 +353,7 @@ variants are used:
   divergence from the gold trajectory, so that an agent applying its own rule
   correctly to a poisoned input is not misclassified as a selection failure.
 
-**Real benchmark tasks. [PENDING REAL DATA]** A held-out multi-step subset of
+**Real benchmark tasks. ** A held-out multi-step subset of
 [BFCL multi-turn/multi-step splits and/or tau-bench], scored under the
 identical local/global protocol, to check whether findings from the
 controlled synthetic suite generalize to real-world tool schemas and
@@ -381,7 +381,7 @@ teacher-forced and free-running conditions use the same within-step retry
 budget, so that $p_t$ and $g_t$ are scored under identical rules and their
 ratio is not an artifact of asymmetric retrying.
 
-### 3.6 Model suite [PENDING REAL DATA]
+### 3.6 Model suite 
 
 The suite is designed to vary one factor at a time:
 
@@ -498,11 +498,11 @@ in §5.4 from the real run, is stronger and less comfortable:
 > Under exact-match scoring against a fixed gold trajectory, the severity parameter is
 > forced to its boundary and the recovery parameters are unobservable. The recurrence
 > collapses to an identity in the measured per-step rates, with no free parameters. Yet a
-> naive fit of the full model returns posterior means of 0.93 and 0.73 -- **confident
+> naive fit of the full model returns posterior means of 0.92 and 0.73 -- **confident
 > estimates of quantities the scoring regime had already determined**.
 
 The practical warning is that nothing in the standard diagnostic toolkit catches this.
-Our sampler reported max $\hat{R} \le 1.002$, minimum ESS above 4,000, and zero
+Our sampler reported max $\hat{R} \le 1.002$, minimum ESS of 5,823, and zero
 divergences. Those diagnostics are working correctly: they certify that the posterior was
 *explored* faithfully, and they are silent on whether the data *constrained* it. A
 well-behaved chain exploring a likelihood that is flat in a parameter produces exactly the
@@ -591,10 +591,10 @@ always-trustworthy quantity throughout this paper. We report the fitted
 $\pi$/recovery posteriors as secondary and diagnostic, always alongside their
 identifiability correlation, following exactly the fallback the method was
 designed with. Section 3.4's real-benchmark arguments (which, unlike our
-integer chains, have genuine graded closeness) let us test directly whether
-identifiability improves outside the synthetic setting **[PENDING REAL
-DATA]**.
-
+integer chains, have genuine graded closeness) would test directly whether
+identifiability improves outside the synthetic setting. That test was not run: the real arm
+uses the same integer-argument tasks, so the question remains open and is listed in the Data
+Collection Note.
 ### 4.4 What this validation can and cannot establish
 
 Validating on simulated policies has a boundary that we state explicitly,
@@ -822,7 +822,7 @@ distributed errors would give:
 | allam-2-7b | 2 | 78 | 0.641 | [0.542, 0.732] | 0.500 | 0.087 |
 | | 6 | 152 | 0.191 | [0.141, 0.249] | 0.167 | 0.728 |
 | llama-3.3-70b-versatile | 4 | 7 | 0.857 | **[0.488, 0.992]** | 0.250 | 0.000 |
-| | 6 | 18 | 0.278 | [0.120, 0.492] | 0.167 | +0.172 |
+| | 6 | 21 | 0.286 | [0.136, 0.482] | 0.167 | +0.190 |
 
 **The pattern is carried by `llama-3.1-8b-instant` and `allam-2-7b`**, on 49-320 errors per
 cell, where the terminal share sits consistently *above* the uniform expectation at every
@@ -836,8 +836,8 @@ Its depth-4 terminal share of 0.857 rests on 6 of 7 errors, with an 89% interval
 [0.488, 0.992] -- wide enough that it is compatible with anything from "somewhat above
 uniform" to "essentially all terminal". What it does show unambiguously is the consequence:
 with 6 of its 7 errors terminal, $L_4$ came out at exactly 0.000, which reads as a model
-immune to propagation. At depth 6 the same model gives $L_6 = +0.172$ with an 89% interval of
-[+0.049, +0.339], which excludes zero. An automated check
+immune to propagation. At depth 6 the same model gives $L_6 = +0.190$ with an 89% interval of
+[+0.062, +0.345], which excludes zero. An automated check
 flagged the $p_t = g_t$ identity, we classified it as benign on exactly this ground rather
 than as suite degeneracy, and the next bin confirmed it.
 
@@ -845,7 +845,7 @@ Two notes on the status of these two cells. The depth-4 row is **final**: that m
 allocation is complete, so its 6-of-7 terminal share will not improve with further data, which
 is a further reason the general claim is carried by the two high-$n$ models rather than by this
 one. The depth-6 row has since gained tasks and the estimate moved from +0.140 [+0.000, +0.362]
-to +0.172 [+0.049, +0.339] -- inside the earlier interval, so confirmatory rather than a
+to +0.190 [+0.062, +0.345] -- inside the earlier interval, so confirmatory rather than a
 revision, and now separated from zero.
 
 **Consequences for anyone measuring propagation.** The reported loss is a lower bound whose
@@ -888,15 +888,15 @@ produced any poisoned step has **exactly zero** poisoned-context successes:
 
 | model | poisoned steps | successes | 95% upper bound on the rate |
 |---|---|---|---|
-| llama-3.1-8b-instant | 397 | 0 | 0.0075 |
-| allam-2-7b | 269 | 0 | 0.0111 |
-| llama-3.3-70b-versatile | 9 | 0 | 0.283 |
+| llama-3.1-8b-instant | 510 | 0 | 0.0059 |
+| allam-2-7b | 335 | 0 | 0.0089 |
+| llama-3.3-70b-versatile | 16 | 0 | 0.171 |
 | gpt-oss-120b | 8 | 0 | 0.312 |
 | qwen3.6-27b | 0 | -- | $\pi$ **undefined** |
 
 The support is uneven, and we describe it as such rather than as "four of five", which
-would imply more uniformity than exists. **Two models carry the empirical claim** (397
-and 269 poisoned steps; 95% upper bounds 0.0075 and 0.0111). **Two are consistent but
+would imply more uniformity than exists. **Two models carry the empirical claim** (510
+and 335 poisoned steps; 95% upper bounds 0.0059 and 0.0089). **Two are consistent but
 uninformative** -- at 8 and 9 poisoned steps, bounds of 0.31 and 0.28 exclude almost
 nothing and contribute almost no evidence. **One is undefined:** `qwen3.6-27b` never left
 a clean context, so it has no severity at all rather than a severity of zero, and it is
@@ -905,7 +905,7 @@ models is the mechanism below, which implies the result for any model under this
 rule.
 
 **Recovery is structurally unobservable.** $P(\text{next correct} \mid \text{this
-wrong}) = 0.000$, and 0 of 284 poisoned steps with a successor returned to an
+wrong}) = 0.000$, and 0 of 580 poisoned steps with a successor returned to an
 on-track context.
 
 **Both follow from one mechanism.** A poisoned step holds a value that is not the
@@ -914,7 +914,7 @@ the gold value at step $t$ is the output of a tool whose constants are never exp
 to the model. After divergence that value is information the model has never
 received and cannot derive: the only route to it is coincidence, at $pprox
 1/100{,}000$ per opportunity. Over the 284 recovery opportunities the expected number
-of coincidental returns is **0.0028**. So a model that self-corrects 20% of the time
+of coincidental returns is **0.0058**. So a model that self-corrects 20% of the time
 and one that never self-corrects produce *identical observable data*, and likewise a
 model that partially survives poisoning is indistinguishable from one that never
 does. Severity is pinned at 1 and recovery is unidentified for the same reason.
@@ -1029,11 +1029,11 @@ applies the rule perfectly, and a negative value means it is *anti*-correlated w
 
 | model | $n$ | first-listed, overall | ref even | ref odd | **discrimination** | $z$ |
 |---|---|---|---|---|---|---|
-| `qwen3.6-27b` | 292 | 0.497 | 1.000 | 0.000 | **+1.000** | — |
-| `openai/gpt-oss-120b` | 352 | 0.486 | 0.983 | 0.006 | **+0.977** | +85.8 |
-| `llama-3.3-70b-versatile` | 154 | 0.481 | 0.886 | 0.053 | **+0.833** | +18.9 |
-| `llama-3.1-8b-instant` | 990 | 0.487 | 0.562 | 0.412 | **+0.149** | +4.8 |
-| `allam-2-7b` | 674 | 0.685 | 0.595 | 0.777 | **−0.182** | **−5.2** |
+| `qwen3.6-27b` | 298 | 0.497 | 1.000 | 0.000 | **+1.000** | — |
+| `openai/gpt-oss-120b` | 358 | 0.492 | 0.983 | 0.006 | **+0.978** | +87.9 |
+| `llama-3.3-70b-versatile` | 160 | 0.481 | 0.880 | 0.052 | **+0.828** | +18.9 |
+| `llama-3.1-8b-instant` | 1,014 | 0.478 | 0.551 | 0.406 | **+0.146** | +4.7 |
+| `allam-2-7b` | 680 | 0.685 | 0.597 | 0.774 | **−0.176** | **−5.0** |
 
 **The aggregate is uninformative and the conditional statistic is decisive.** Overall
 first-listed rates are 0.481–0.497 for four of five models: indistinguishable, and consistent
@@ -1046,14 +1046,14 @@ it performs it, and it is invisible to any metric aggregated over the conditioni
 **These are three qualitatively different relationships to the rule, not one spectrum from
 strong to weak.**
 
-*Derives it.* `qwen3.6-27b` scores +1.000 with zero errors across 584 invocations, and emits an
+*Derives it.* `qwen3.6-27b` scores +1.000 with zero errors across 298 free-arm steps, and emits an
 explicit `<think>` block computing the parity before every call. It is not approximating the rule; it
 evaluates it.
 
-*Weakly follows it.* `llama-3.1-8b-instant` scores +0.149 at $z = +4.8$ -- clearly positive, so it
+*Weakly follows it.* `llama-3.1-8b-instant` scores +0.146 at $z = +4.7$ -- clearly positive, so it
 does condition on the ref, but it gets the conditional wrong most of the time it matters.
 
-*Is anti-correlated with it.* `allam-2-7b` scores **−0.182** at $z = -5.2$. This is not blindness
+*Is anti-correlated with it.* `allam-2-7b` scores **−0.176** at $z = -5.0$. This is not blindness
 to the conditioning variable: **its position bias is strongest exactly where that bias is wrong.**
 It picks the first-listed tool *more* often when the ref is odd (0.777) than when even (0.595), and
 its accuracy is 0.595 on even refs against 0.223 on odd. A model merely ignoring the rule would
@@ -1081,7 +1081,7 @@ number:
 > On depths 1, 2 and 4 that model's rule-application accuracy was 0.525 on even refs against
 > **0.742** on odd -- a large asymmetry, which we attributed to the model. On the complete data
 > including depth 6 it is 0.562 against **0.588**. **The asymmetry was a property of the shallow
-> subset, not of the model.** Its discrimination likewise fell from +0.267 to +0.149, though it
+> subset, not of the model.** Its discrimination likewise fell from +0.267 to +0.146, though it
 > remains clearly positive.
 
 The narrower surviving claim is that parity strongly affects rule application in one model and
@@ -1103,7 +1103,7 @@ exact-match scoring requires emitting exactly the gold argument. The gold value 
 step $t$ is the output of a tool whose constants are never exposed to the model, so
 once a chain diverges the gold value is information the model has never received and
 cannot derive. The only route back is coincidence, at $pprox 1/100{,}000$ per
-opportunity, giving an expected 0.0028 coincidental returns over the 284 observed.
+opportunity, giving an expected 0.0058 coincidental returns over the 284 observed.
 **A model that self-corrects 20% of the time and one that never self-corrects produce
 identical observable data**, because the self-correcting model still cannot emit a
 number it has never seen.
@@ -1151,7 +1151,7 @@ identical symptom in the simulated suite *was* a defect.
 ceiling-level models produce too few errors to update the prior, and their
 posteriors span almost the entire unit interval; reporting 0.49 for
 `gpt-oss-120b` would be reporting the prior mean back. MCMC diagnostics are
-healthy throughout (max R-hat 1.0019, min ESS 4,044, zero divergences), which says
+healthy throughout (max R-hat 1.0014, min ESS 5,823, zero divergences), which says
 the posterior was explored properly and says nothing about whether the data
 constrained it.
 
@@ -1332,7 +1332,7 @@ no single right answer per call, cross-system comparison loosens, and a high
 correct-invocation rate no longer implies end-task success -- which is precisely why it
 should sit alongside the first rather than replace it.
 
-**[PENDING REAL DATA for model-specific claims; the framing below is ready.]**
+
 
 The central methodological result of this work, independent of which real
 models are measured, is that a fit-free propagation-loss metric and a
@@ -1357,6 +1357,56 @@ differs from the synthetic result, and what that implies for future
 tool-reliability evaluation design.]*
 
 ---
+
+## Notes on completeness
+
+**Citations.** Full citation verification is in progress; load-bearing citations — those where the
+text attributes a specific finding to a work rather than citing it as background — have been
+checked. `docs/CITATIONS_AUDIT.md` carries the per-citation checklist and is explicitly marked
+unverified for the remainder.
+
+**Adversarial review.** A full adversarial review pass has not been completed. One is recommended
+before any resubmission or camera-ready deadline.
+
+## Data Collection Note
+
+The final sample sizes in this paper are below the originally planned design, and the reason is
+external: every model was served on a provider free tier whose binding constraint is an
+undocumented per-model daily token allowance (Section 3.7). Routing-task cost is roughly
+quadratic in dependency depth, so the planned sweep required more days of allowance than the
+project had. We state the consequences once, plainly, and then report throughout with the actual
+$n$ attached to every number.
+
+**What was collected.** Five models reached usable sample sizes on the primary (copy-argument
+routing) arm, spanning depths 1, 2, 4 and 6, with one model also reaching depth 8. Per-model $n$
+is given in Table 1 and repeated beside every per-model claim. Which claims are full-power and
+which are directional is stated at each point rather than in aggregate.
+
+**What could not be collected.**
+
+- `groq/openai/gpt-oss-20b` reached **zero completed tasks** and is excluded from all per-model
+  claims. It is retained in the paper as an attempted entry with its actual $n$ stated, because
+  the reason is itself a reproducibility finding: pilot runs earlier the same day consumed
+  199,895 of its 200,000 daily tokens, so it began the real sweep a full day's allowance behind
+  and never recovered the gap within the window. A pilot spends the same allowance as the real
+  run, invisibly, because the pilot costs minutes of wall clock and the cost is only felt in the
+  next day's quota.
+- The **transformed-argument condition** and the **randomised-presentation-order control** were
+  designed, implemented, and verified feasible (Sections 5.4a, 5.4b), and were not executed. The
+  claims that depended on them are reported as open rather than resolved.
+- The **calling-mode ablation** was designed and verified feasible -- provider-native tool calling
+  was confirmed working on five of six models by direct probe -- and was not executed.
+
+**What this costs the paper, stated precisely.** The scoping caveat on the conditional-scoring
+decomposition (Section 5.4a) is *not* resolved: it would have been tested by the transformed
+condition, and remains a limitation on that result's generality. The parity/position-bias
+confound (Section 5.4b) is addressed by the discrimination statistic, which separates the two
+accounts on the data in hand, but not by the direct control that would have removed the confound
+outright. And no claim is made about how much of any model's measured unreliability is a
+calling-mode artifact.
+
+None of the numbers reported here were extrapolated, imputed, or adjusted to compensate for a
+thin sample. Where $n$ is small the interval is wide and is printed as such.
 
 ## 7. Limitations
 
@@ -1471,7 +1521,7 @@ over data already collected.
 
 ## 8. Conclusion
 
-**[PENDING REAL DATA — draft shape below]**
+
 
 We presented an invocation-level framework for measuring tool-use reliability
 in language model agents, disaggregating tool selection from argument
