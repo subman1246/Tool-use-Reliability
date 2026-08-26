@@ -1,0 +1,43 @@
+% Methodology diagram: two-arm protocol + three-state propagation model
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners=2pt, minimum height=0.65cm, align=center, font=\footnotesize, inner sep=4pt},
+    state/.style={draw, circle, minimum size=0.9cm, font=\scriptsize, align=center},
+    arrow/.style={-{Latex[length=2mm]}, thick},
+    dashedarrow/.style={-{Latex[length=2mm]}, dashed},
+    scale=0.92, every node/.style={transform shape}
+]
+
+% --- Panel A: two-arm protocol ---
+\node[box, fill=blue!8, minimum width=3.1cm] (task) at (0,3.4) {task at depth $d$\\(schema + history)};
+\node[box, fill=green!10, minimum width=3.4cm] (tf) at (-2.6,2.0) {baseline arm\\correct history provided};
+\node[box, fill=red!10, minimum width=3.4cm] (free) at (2.6,2.0) {free-running arm\\model acts on own outputs};
+\node[box, minimum width=2.6cm] (pt) at (-2.6,0.7) {measure $\bar p_d$};
+\node[box, minimum width=2.6cm] (gt) at (2.6,0.7) {measure $\bar g_d$};
+\node[box, fill=yellow!15, minimum width=3.4cm] (Lt) at (0,-0.6) {$L_d = 1 - \bar g_d/\bar p_d$\\relative propagation loss};
+
+\draw[arrow] (task) -- (tf);
+\draw[arrow] (task) -- (free);
+\draw[arrow] (tf) -- (pt);
+\draw[arrow] (free) -- (gt);
+\draw[arrow] (pt) -- (Lt);
+\draw[arrow] (gt) -- (Lt);
+
+% --- Panel B: three-state Markov model, to the right ---
+\begin{scope}[yshift=-0.45cm]
+\node[state, fill=green!15] (C) at (7.3,2.6) {clean\\$c_k$};
+\node[state, fill=orange!15] (S) at (10.3,3.6) {poisoned\\syntax\\$s_k$};
+\node[state, fill=red!15] (M) at (10.3,1.6) {poisoned\\semantic\\$m_k$};
+
+\draw[arrow] (C) to[bend left=12] node[above,font=\tiny,sloped]{$(1{-}p_k)f_{\mathrm{syn}}$} (S);
+\draw[arrow] (C) to[bend right=12] node[below,font=\tiny,sloped]{$(1{-}p_k)(1{-}f_{\mathrm{syn}})$} (M);
+\draw[arrow] (S) to[bend left=12] node[above,font=\tiny,sloped]{$r_{\mathrm{syn}}$} (C);
+\draw[arrow] (M) to[bend right=12] node[below,font=\tiny,sloped]{$r_{\mathrm{sem}}$} (C);
+\draw[arrow] (C) to[loop above] node[above,font=\tiny]{$p_k$} (C);
+
+\node[font=\scriptsize, align=center, text width=3.5cm] at (8.8,-0.2) {\textbf{If the gold target is unreachable}\\(Sec.~5.3): gold match $\leq\epsilon_k$;\\score $\neq$ local competence};
+\end{scope}
+
+\node[font=\bfseries\small] at (0,4.1) {A.\ Two-arm scoring protocol};
+\node[font=\bfseries\small] at (8.8,4.35) {B.\ Propagation model};
+
+\end{tikzpicture}

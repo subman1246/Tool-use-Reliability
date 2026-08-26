@@ -1,3 +1,11 @@
+> **SUPERSEDED.** This file is an early-stage draft kept for historical record. The
+> current paper is `paper/main.tex` (compiles to `paper/main.pdf`). Notably, this draft
+> predates: the $\bar p_d$/$\bar g_d$ notation fix, the formal construct-validity
+> proposition in Section 5.3, the corrected monotonicity claims, and the current
+> citation list. See `docs/REVIEWER_FEEDBACK_STATUS.md` for what changed and why.
+
+---
+
 # Invocation-Level Reliability of Tool Use in Language Model Agents
 
 *Complete draft. Every number is measured on a dataset frozen at 14:09 on 2026-08-17; no API
