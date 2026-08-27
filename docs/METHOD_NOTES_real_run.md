@@ -562,6 +562,46 @@ one layer further out: the simulator principle governs what a validation run can
 principle governs what a real run can see, and this one governs what an *aggregate over a
 heterogeneous suite* can see.
 
+## Two suite models were retired mid-project (2026-08-27)
+
+A pre-flight allowance check before running the deferred ablations found that **both Llama models
+are no longer served on Groq's free tier**. This is not a token-allowance problem: the API returns
+`NotFoundError`, and the live model list confirms it.
+
+Currently served (14 models): `allam-2-7b`, `openai/gpt-oss-20b`, `openai/gpt-oss-120b`,
+`openai/gpt-oss-safeguard-20b`, `qwen/qwen3.6-27b`, `qwen/qwen3.8-27b`, `groq/compound`,
+`groq/compound-mini`, two `llama-prompt-guard-2` classifiers, two `orpheus` speech models, and two
+`whisper` models.
+
+| Suite model | Status 2026-08-27 |
+|---|---|
+| `llama-3.1-8b-instant` | **RETIRED** |
+| `llama-3.3-70b-versatile` | **RETIRED** |
+| `allam-2-7b` | serving |
+| `openai/gpt-oss-20b` | serving |
+| `openai/gpt-oss-120b` | serving |
+| `qwen/qwen3.6-27b` | serving |
+
+**No Llama chat model remains on the tier at all** -- the only `meta-llama` entries are
+prompt-guard classifiers, which are not chat models and cannot run the task.
+
+This matters beyond housekeeping, in two ways.
+
+**It removes the model carrying the paper's principal empirical claim from all future data
+collection.** `llama-3.1-8b-instant` contributed the largest dataset (273 tasks, the only model
+reaching depth 8, $L_6 = 0.686$) and is one of only two models with an informative severity
+estimate. Its collected data remains valid and is frozen; what is gone is the ability to run *new*
+conditions on it, so no ablation can be compared against its primary-arm result.
+
+**It is the second instance of the same hazard in one project.** Every model ID in the original
+configuration was already stale before the first run -- the entire Qwen2.5/Llama-3.1-instruct
+generation had been retired -- and now two more have gone during the study. The interval between
+first and last collection here was ten days. For anyone replicating on a free tier, the practical
+consequence is that **model availability is not a fixed property of the experiment**: a suite
+defined at design time may not be servable at analysis time, and any result that depends on
+re-querying a specific model should be collected while that model is known to be available rather
+than deferred.
+
 ## MoE scale is reported on both axes, because they disagree
 
 Two models in the suite are sparse mixture-of-experts, and for them "parameter
