@@ -464,4 +464,68 @@ Final-state tests (AppWorld, $\tau$-bench) & Yes & End-task state and side effec
 \end{tabular}
 \end{table}
 
+\section{Posterior predictive check for the step-model fit}
+\label{app:ppc}
+
+Section~\ref{sec:central-result} states that the hierarchical fit is misspecified rather than
+merely uncertain. This appendix shows the check behind that claim, and the reason a
+conventional diagnostic does not detect it.
+
+The fitted model implies that a call issued on a corrupted context succeeds with
+probability $(1-\pi)p_k$, which is strictly positive for any $\pi<1$. Summed over the
+corrupted-context calls in the suite, it therefore predicts a positive number of canonical
+matches. The observed number is zero. We rebuilt the fitted model with one additional
+observed node for that subset and drew from
+\texttt{pm.sample\_posterior\_predictive} against the existing trace; no new model queries
+were required.
+
+\begin{table}[h]
+\centering
+\caption{Posterior predictive checks on two fits. The targeted check evaluates canonical
+matches among corrupted-context calls only; the aggregate check evaluates total
+free-running successes, which is the quantity such a fit is ordinarily judged on. Both
+fits pass the aggregate check and fail the targeted one.}
+\label{tab:ppc}
+\scriptsize
+\begin{tabular}{@{}lrr@{}}
+\toprule
+ & Real-model fit & Simulated-suite fit (control) \
+\midrule
+Corrupted-context calls & 869 & 9{,}624 \
+Observed canonical matches & \textbf{0} & 1{,}648 \
+Predicted mean & 67.7 & 3{,}173 \
+Predicted 89\% interval & $[39,\ 98]$ & $[2{,}899,\ 3{,}427]$ \
+Minimum over 6{,}000 replicates & 10 & 2{,}427 \
+Targeted check, $\Pr(\text{rep}\le\text{obs})$ & $0.000$ & $0.000$ \
+\midrule
+Aggregate check, Bayesian $p$ & \textbf{0.420} & \textbf{0.282} \
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.82\textwidth]{fig_ppc.pdf}
+\caption{Posterior predictive distribution of canonical matches among the 869
+corrupted-context calls in the real-model fit, against the observed value. No replicate
+reaches the observation; the smallest of 6{,}000 is 10.}
+\label{fig:ppc}
+\end{figure}
+
+Two points follow. First, \textbf{the conventional check would have certified this fit as
+adequate}. Replicated total free-running successes match the observation closely
+($p=0.420$), because the marginal rate $g_k$ averages over clean and corrupted contexts and
+the clean ones dominate the counts. A posterior predictive check aimed at the aggregate is
+structurally blind to a failure confined to the corrupted subset, so passing it is not
+evidence that the step model describes post-divergence behavior. Reporting an aggregate
+predictive check alongside boundary-valued severity posteriors is therefore not a safeguard.
+
+Second, the same targeted check fails on the simulated suite, where the generating policies
+\emph{were} configured to recover and the observed count is a substantial 1{,}648. The fit
+over-predicts there too, by roughly a factor of two. The over-prediction is thus a property
+of the fit --- which under-estimates severity, so $(1-\pi)$ is too large --- and not an
+artifact peculiar to real data sitting at a scorer-imposed boundary. This is what
+distinguishes the finding from a claim that real models are simply harder to fit.
+
+
 \end{document}
