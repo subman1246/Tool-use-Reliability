@@ -97,10 +97,10 @@ A task of dependency depth $d$ contains calls indexed by position $k\in\{1,\ldot
 \begin{itemize}[leftmargin=*,itemsep=1pt,topsep=1pt,parsep=0pt]
   \item \textbf{Pooled baseline correctness $\bar p_d$}: invocation accuracy with a guaranteed-correct prior history.
   \item \textbf{Pooled free-running correctness $\bar g_d$}: invocation accuracy with the model's own prior outputs.
-  \item \textbf{Relative propagation loss} $L_d \coloneqq 1-\bar g_d/\bar p_d$. We also report the absolute gap $A_d=\bar p_d-\bar g_d$ and error amplification $E_d=(1-\bar g_d)/(1-\bar p_d)$ (Appendix~\ref{app:aggregate}).
+  \item \textbf{Relative propagation loss} $L_d \coloneqq 1-\bar g_d/\bar p_d$. We also report the absolute gap $A_d=\bar p_d-\bar g_d$ and error amplification $E_d=(1-\bar g_d)/(1-\bar p_d)$.
 \end{itemize}
 
-$L_d$ is descriptive and invocation-pooled; it is not the stepwise quantity in the Markov recurrence below. Calls from one task are dependent, so inferential intervals must resample matched tasks jointly rather than treat $N_dd$ calls as independent. The conclusions emphasized here are the paired point-estimate pattern, the directly observed corrupted-context counts, and the scorer theorem; Appendix~\ref{app:aggregate} exposes the aggregate counts recoverable from the paper.
+$L_d$ is descriptive and invocation-pooled; it is not the stepwise quantity in the Markov recurrence below. Calls from one task are dependent, so inferential intervals must resample matched tasks jointly rather than treat $N_dd$ calls as independent. The conclusions emphasized here are the paired point-estimate pattern, the directly observed corrupted-context counts, and the scorer theorem.
 
 \subsection{A propagation model with recovery}
 \label{sec:propagation-model}
@@ -197,7 +197,7 @@ depth $d$ & $\bar p_d$ & $\bar g_d$ & $L_d$ [89\% interval] & calls \\
 \end{tabular}
 \end{table}
 
-\textbf{$L_1=0$ exactly on every model}: both arms build an identical depth-1 prompt and share one cached response, providing an implementation invariant. At depth 6, \texttt{llama-3.1-8b} has identical baseline/free error counts at the first position (21/21), after which free-running errors rise while baseline errors remain approximately flat. The alternative aggregate summaries in Appendix~\ref{app:aggregate} show the same through-depth-6 increase without dividing by baseline accuracy.
+\textbf{$L_1=0$ exactly on every model}: both arms build an identical depth-1 prompt and share one cached response, providing an implementation invariant. At depth 6, \texttt{llama-3.1-8b} has identical baseline/free error counts at the first position (21/21), after which free-running errors rise while baseline errors remain approximately flat. The absolute gap and error-amplification summaries show the same through-depth-6 increase without dividing by baseline accuracy.
 
 The lag association $\Delta_1=P(k{+}1\text{ correct}\mid k\text{ correct})-P(k{+}1\text{ correct}\mid k\text{ wrong})$ is positive for every model with errors ($+0.32$ to $+1.00$). It is descriptive rather than causal; its second term is zero under canonical gold agreement because of the unreachable-target mechanism below.
 
@@ -239,7 +239,7 @@ The proposition is about \emph{construct validity}: when $\epsilon_k$ is negligi
 \paragraph{Instantiation in this suite.}
 After divergence, canonical arguments depend on the hidden-constant output associated with the gold state. Under the generator assumption that this target is conditionally uniform over $M=100{,}000$ values, $\epsilon_k=10^{-5}$. We observe 0 gold matches among 869 corrupted-context calls and 0 canonical reconvergences among 580 opportunities. Even a pure-guess process has expected reconvergences $580/M=0.0058$, with probability of any such event at most 0.0058. Zero therefore carries essentially no information about whether the agent can apply the local routing/copy rule in its actual state.
 
-If one nevertheless substitutes the scorer-implied boundary $\pi=1$ and zero canonical recovery into the step model, it collapses to $g_k^{\mathrm{model}}=c_kp_k$ and $c_k=\prod_{j<k}p_j$. A hierarchical fit to pooled aggregates returned severity posteriors of 0.92 and 0.73 despite zero observed post-divergence gold matches; $\hat R\le1.0005$, ESS $\ge5{,}823$, and zero divergences only show that the misspecified posterior was explored successfully.
+If one nevertheless substitutes the scorer-implied boundary $\pi=1$ and zero canonical recovery into the step model, it collapses to $g_k^{\mathrm{model}}=c_kp_k$ and $c_k=\prod_{j<k}p_j$. A hierarchical fit to pooled aggregates returned severity posteriors of 0.92 and 0.73 despite zero observed post-divergence gold matches; $\hat R\le1.0005$, ESS $\ge5{,}823$, and zero divergences show only that the misspecified posterior was explored successfully: a targeted posterior predictive check finds 0 of 6{,}000 replicates reproducing the observed zero canonical matches among corrupted-context calls, against a predicted mean of 67.7.
 
 \paragraph{Counterexample and scope.}
 Fixed reference is not sufficient for the proposition. If $Y_k^*$ is reconstructible from the observable history, independent of the corrupted value, or reachable through reset/re-query actions, $\epsilon_k$ may be large and canonical recovery can be meaningful. Final-state unit tests and milestone-DAG evaluators can also accept alternative valid trajectories. Our claim is therefore restricted to canonical scoring under an empirically or structurally small $\epsilon_k$; it is not a blanket claim about execution match, AST match, or fixed references.
