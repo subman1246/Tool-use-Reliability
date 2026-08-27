@@ -234,6 +234,47 @@ def lt_all_models() -> None:
     plt.close(fig)
 
 
+def posterior_predictive() -> None:
+    """Posterior predictive check for the fitted severity/recovery model.
+
+    Numbers are read from data/results/real_ppc.json, produced by
+    scripts/posterior_predictive_check.py, which reuses the already-fit trace and
+    makes no model queries.  The observed value is a structural zero: no call made
+    on a corrupted context matched the canonical target anywhere in the dataset.
+    """
+    import json
+
+    src = Path(__file__).resolve().parents[1] / "data" / "results" / "real_ppc.json"
+    d = json.loads(src.read_text())
+    rep = np.array(d["replicates"], dtype=float)
+    observed = d["observed_poisoned_matches"]
+    n_pois = d["observed_poisoned_calls"]
+
+    fig, ax = plt.subplots(figsize=(5.75, 2.6))
+    ax.hist(rep, bins=np.arange(rep.min() - 0.5, rep.max() + 1.5, 2.0),
+            color="#1a5276", edgecolor="none", alpha=0.85,
+            label=f"posterior predictive replicates (n={rep.size:,})")
+    ax.axvline(observed, color="#c0392b", linewidth=1.6,
+               label=f"observed = {observed}")
+    ax.set_xlabel(
+        f"replicated canonical matches among the {n_pois} corrupted-context calls"
+    )
+    ax.set_ylabel("replicates")
+    ax.set_xlim(-4, rep.max() * 1.04)
+    ax.legend(frameon=False, loc="upper right")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.tick_params(axis="both", width=0.8)
+    ax.annotate(
+        "no replicate reaches the observed value"
+        + "\n(minimum %d; mean %.0f)" % (int(rep.min()), rep.mean()),
+        xy=(observed, ax.get_ylim()[1] * 0.55),
+        xytext=(rep.mean() * 0.42, ax.get_ylim()[1] * 0.72),
+        arrowprops=dict(arrowstyle="->", color="#c0392b", linewidth=0.9),
+        color="#c0392b", ha="left",
+    )
+    fig.savefig(OUT / "fig_ppc.pdf", bbox_inches="tight")
+    plt.close(fig)
+
 
 if __name__ == "__main__":
     severity_comparison()
@@ -241,3 +282,4 @@ if __name__ == "__main__":
     metric_sensitivity()
     discrimination()
     lt_all_models()
+    posterior_predictive()

@@ -90,11 +90,25 @@ work is execution (API budget and wall-clock time), not design.
   than propagation) by establishing propagation causally rather than observationally.
 - **Full linear-task null control** at the main suite's depths and sample sizes. Piloted
   only (`§3.3`: "Pilot runs were degenerate... the full null arm was not executed").
-- **Posterior predictive check** for the hierarchical model (Part 2 above). This is a
-  code addition to `src/tur/model/hierarchical.py` or a new analysis script calling
-  `pm.sample_posterior_predictive()` against the existing `data/results/official_idata.pkl`
-  trace, comparing replicated zero-count structure against the observed zero. No new
-  model API calls needed — this reuses the already-fit posterior.
+- **Posterior predictive check** for the hierarchical model — **RUN, see results.**
+  Implemented in `scripts/posterior_predictive_check.py`, which rebuilds the fitted model
+  with one extra observed node and calls `pm.sample_posterior_predictive()` against the
+  existing trace. No model API calls. Run on both the real fit and, as a control, the
+  simulated one.
+
+  **Result: 0 of 6,000 replicates reach the observed value on the real fit.** The model
+  predicts 67.7 canonical matches on average among the 869 corrupted-context calls (89%
+  interval [39, 98], minimum across all replicates 10); the observed count is 0. The
+  standard check on the same fit — replicated total free-arm successes — *passes*
+  comfortably at Bayesian p = 0.420, so the conventional PPC has no power against this
+  failure mode. The simulated fit fails the same targeted check in the same direction
+  (observed 1,648 of 9,624, replicate interval [2,899, 3,427]) while also passing the
+  standard one at p = 0.282, which shows the over-prediction of poisoned-call success is a
+  property of the fit rather than an artifact of the real data's boundary.
+
+  Data: `data/results/real_ppc.json`, `data/results/official_ppc.json`.
+  Figure: `paper/fig_ppc.pdf`, reproducible via `posterior_predictive()` in
+  `paper/make_aggregate_figures.py`.
 
 ---
 
