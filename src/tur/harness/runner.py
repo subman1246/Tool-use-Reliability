@@ -597,6 +597,14 @@ class StepRecord:
     # correctly for even refs" predict overlapping data; recording the order lets
     # the two be separated directly rather than only via a discrimination statistic.
     first_listed_even: bool = True
+    # Controlled error injection. None on every other run mode. `pair_id` ties the
+    # clean and corrupted members of one injection pair together: the pairing is a
+    # property of how the two prompts were BUILT (identical prefix, one substituted
+    # value), so it is recorded at construction rather than reconstructed later by
+    # matching on task_id and step, which would silently pair across corruption modes.
+    inject_at: int | None = None
+    injection: str | None = None
+    pair_id: str | None = None
 
 
 # --------------------------- prompt ---------------------------
@@ -863,3 +871,157 @@ def dump_jsonl(records: list[StepRecord], path: str) -> None:
     with open(path, "a") as f:
         for r in records:
             f.write(json.dumps(asdict(r)) + "\n")
+
+
+# --------------------- controlled error injection ---------------------
+#
+# What the observational arms cannot do. In the free run a corrupted context is
+# something the model PRODUCED, so "models fail more after a corrupted context" is
+# confounded: whatever made the model err at step j-1 (a hard branch, an unlucky
+# value, a weak moment) is still present at step j. Severity is therefore estimated
+# from data in which treatment assignment is decided by the model itself. That is the
+# identifiability problem the paper's hierarchical fit runs into from the other side.
+#
+# Injection removes the confound by construction. Both members of a pair are built
+# from a byte-identical gold prefix and differ in exactly one substituted number: the
+# result reported for step inject_at-1. The model did not choose to be corrupted, so
+# the difference in step-inject_at accuracy between the two members is a causal
+# effect of context corruption rather than an association with it.
+#
+# Scoring is conditional-on-state, not gold-agreement. Under a corrupted ref the gold
+# tool is no longer the correct answer -- an agent applying the routing rule perfectly
+# to the value it holds will legitimately depart from gold -- so both members are
+# scored against _expected_tool_given_ref / _expected_args_given_held at the value
+# actually held. Scoring the corrupted member against gold would guarantee failure and
+# measure nothing but the substitution.
+#
+# Two corruption modes, because they load different channels:
+#
+#   parity_flip         the substituted value has OPPOSITE parity, so the routing rule
+#                       selects the other branch. The correct TOOL changes. This is the
+#                       selection channel, and it is the mode that mimics a real
+#                       propagated error in the routing task.
+#   parity_preserving   the substituted value has the SAME parity, so the correct tool
+#                       is unchanged and only the argument to send differs. This is the
+#                       argument channel.
+#
+# Running both separates "a corrupted context degrades rule application" from "a
+# corrupted context degrades value transcription". A single corruption mode cannot:
+# parity_flip alone confounds the two, since it changes tool and argument together.
+
+_INJ_CLEAN = "inj_clean"
+_INJ_CORRUPT = "inj_corrupt"
+_INJECTIONS = ("parity_flip", "parity_preserving")
+
+
+def _corrupt_value(value: int, mode: str, seed: int) -> int:
+    """Substitute a wrong value for `value` under the named corruption mode.
+
+    MOD is even, so reducing mod MOD preserves the parity of the sum. An odd delta
+    therefore always flips parity and an even delta always keeps it, with no need to
+    check the result and resample.
+    """
+    from tur.tasks.dag import MOD
+    rng = random.Random(seed)
+    if mode == "parity_flip":
+        delta = rng.randrange(1, MOD, 2)        # odd  -> parity flips
+    elif mode == "parity_preserving":
+        delta = rng.randrange(2, MOD, 2)        # even -> parity kept, value differs
+    else:
+        raise ValueError("unknown injection mode " + repr(mode))
+    return (int(value) + delta) % MOD
+
+
+def run_injection_pair(task, backend: Backend, inject_at: int,
+                       corruption: str = "parity_flip",
+                       call_mode: str = "uniform",
+                       feedback: FeedbackMode = FeedbackMode.STRUCTURED,
+                       max_retries: int = 1,
+                       schema_style: str = "verbose") -> list[StepRecord]:
+    """Run one clean/corrupted pair at `inject_at` and return both records.
+
+    Both conditions are run here rather than in two passes so that the identical
+    prefix is guaranteed by construction: the two message lists are built in the same
+    call, from the same task object, and provably differ in one element.
+    """
+    if not hasattr(task, "branches"):
+        raise ValueError("error injection requires a RoutingTask: on a linear task "
+                         "the tool order is announced in the prompt, so corrupting a "
+                         "value cannot change which tool is correct and the selection "
+                         "channel the injection is meant to load does not exist.")
+    if not 1 <= inject_at < task.depth:
+        raise ValueError("inject_at must satisfy 1 <= inject_at < depth (" +
+                         str(task.depth) + "); got " + str(inject_at) +
+                         ". Step 0 has no previous result to corrupt.")
+    if corruption not in _INJECTIONS:
+        raise ValueError("unknown injection mode " + repr(corruption))
+
+    true_val = task.gold[inject_at - 1].output
+    # crc32 of a stable string, NOT hash(): hash() is randomised per interpreter by
+    # PYTHONHASHSEED, which would make the injected value differ between a run and its
+    # replay and quietly break cache reuse and reproducibility.
+    import zlib
+    seed = zlib.crc32((task.task_id + "|" + str(inject_at) + "|" + corruption).encode())
+    bad_val = _corrupt_value(true_val, corruption, seed)
+    pair_id = task.task_id + "|j" + str(inject_at) + "|" + corruption
+
+    records: list[StepRecord] = []
+    for mode, held in ((_INJ_CLEAN, true_val), (_INJ_CORRUPT, bad_val)):
+        messages = [{"role": "system", "content": _SYSTEM},
+                    {"role": "user", "content": _task_intro(task, schema_style)}]
+        for j in range(inject_at):
+            messages.append({"role": "user", "content": "[step " + str(j) + "]"})
+            messages.append({"role": "assistant",
+                             "content": json.dumps({"tool": task.gold[j].tool,
+                                                    "args": task.gold[j].args})})
+            # THE ONLY DIFFERENCE between the two members of the pair is this value,
+            # and only on the final iteration of this loop.
+            shown = held if j == inject_at - 1 else task.gold[j].output
+            messages.append({"role": "user", "content": "result: " + str(shown)})
+
+        gold = task.gold[inject_at]
+        attempts = 0
+        recovered = False
+        final_score = None
+        executed = False
+        final_call = None
+        for attempt in range(max_retries + 1):
+            attempts += 1
+            ctx = {"task": task, "step": inject_at, "ref": held, "attempt": attempt}
+            messages.append({"role": "user", "content": "[step " + str(inject_at) + "]",
+                             "_ctx": ctx})
+            resp = backend.complete(messages, task.schema_view(), call_mode)
+            fr = resp.get("finish_reason") if isinstance(resp, dict) else None
+            was_truncated = (fr == "length") if fr is not None else None
+            call = parse_response(resp, call_mode)
+            final_call = call
+            ex = execute(task, call.tool or "", call.args or {}, feedback)
+            score = score_step(
+                call, gold, ex.schema_valid, ex.known_tool,
+                expected_tool=_expected_tool_given_ref(task, inject_at, held),
+                expected_args=_expected_args_given_held(task, inject_at, held))
+            final_score = score
+            if ex.ok:
+                executed = True
+                if attempt > 0 and score.correct:
+                    recovered = True
+                break
+            messages.append({"role": "user", "content": ex.feedback})
+
+        records.append(StepRecord(
+            task.task_id, task.depth, inject_at, mode, call_mode,
+            final_call.tool if final_call else None,
+            final_score.selection_correct, final_score.selection_matches_gold,
+            final_score.args_correct_strict,
+            final_score.args_correct_soft, final_score.error_type.value,
+            attempts, executed,
+            context_clean_in=(mode == _INJ_CLEAN),
+            recovered=recovered, stalled_in=False,
+            backend_error=bool(final_call and final_call.is_backend_error),
+            args_correct_given_state=final_score.args_correct_given_state,
+            correct_given_state=final_score.correct_given_state,
+            held_ref=held,
+            first_listed_even=_first_listed_even(task, inject_at),
+            truncated=was_truncated,
+            inject_at=inject_at, injection=corruption, pair_id=pair_id))
+    return records

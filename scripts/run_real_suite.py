@@ -40,6 +40,7 @@ from tur.tasks.dag import generate_suite, generate_routing_suite
 from tur.harness.cache import Cache
 from tur.harness.executor import FeedbackMode
 from tur.harness.runner import (run_free, run_teacher_forced, LiteLLMBackend,
+                                run_injection_pair,
                                 RateLimiter, DailyCapReached)
 from tur.analysis.aggregate import (load_records, aggregate_by_depth,
                                     stats_to_arrays, bootstrap_L_ci,
@@ -89,7 +90,10 @@ def log(lines: list[str], msg: str) -> None:
 
 def _suite_for(variant: str, depths, per_depth, distractor_level: int, seed: int,
                arg_shift: int = 0, shuffle_branch_order: bool = False):
-    if variant == "routing":
+    # Injection is an intervention ON the routing task, not a task family of its own:
+    # it needs a branch structure for a corrupted value to be able to change which
+    # tool is correct, so it draws from the same generator as the routing arm.
+    if variant in ("routing", "injection"):
         return generate_routing_suite(depths, per_depth, distractor_level,
                                       base_seed=seed * 31 + 1000,
                                       arg_shift=arg_shift,
@@ -250,7 +254,9 @@ def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
              call_mode: str, cache_dir: str, headroom: float = 0.80,
              variant: str = "routing", tpd: int | None = None,
              lines: list[str] | None = None, deadline: float | None = None,
-             arg_shift: int = 0, shuffle_branch_order: bool = False
+             arg_shift: int = 0, shuffle_branch_order: bool = False,
+             inject_at: list[int] | None = None,
+             injections: list[str] | None = None
              ) -> tuple[list[dict], dict, bool]:
     """Run one model's full sweep on one task variant.
 
@@ -291,9 +297,25 @@ def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
                            f"nested prefix")
                 return records, backend.stats(), True
             try:
-                f = run_free(task, backend, call_mode, feedback, max_retries)
-                t = run_teacher_forced(task, backend, call_mode, feedback,
-                                       max_retries)
+                if variant == "injection":
+                    # One pair per (position, corruption mode). Positions at or
+                    # beyond this task's depth are skipped rather than clamped: a
+                    # clamped position would silently pile several nominal depths
+                    # onto the same real one and flatten the position profile that
+                    # is the point of sweeping j at all.
+                    pairs = []
+                    for j in (inject_at or []):
+                        if not 1 <= j < task.depth:
+                            continue
+                        for mode in (injections or []):
+                            pairs += run_injection_pair(
+                                task, backend, j, mode, call_mode, feedback,
+                                max_retries)
+                    f, t = pairs, []
+                else:
+                    f = run_free(task, backend, call_mode, feedback, max_retries)
+                    t = run_teacher_forced(task, backend, call_mode, feedback,
+                                           max_retries)
             except DailyCapReached as e:
                 log(lines, f"\n  !! DAILY CAP REACHED for {name} [{variant}] at "
                            f"seed {seed}, task {i + 1}/{len(suite)}: {e}")
@@ -379,6 +401,12 @@ def main():
     # docs/METHOD_NOTES_real_run.md for why this exists (H4 had an empty category
     # on the copy variant, so the hypothesis could not be tested at all).
     arg_shift = int(cfg.get("arg_shift", 0) or 0)
+    inject_at = [int(x) for x in (cfg.get("inject_at") or [])]
+    injections = list(cfg.get("injections") or [])
+    if variant == "injection" and not (inject_at and injections):
+        raise SystemExit("task_variant: injection requires non-empty 'inject_at' "
+                         "and 'injections' in the config; refusing to run a sweep "
+                         "that would spend budget and collect nothing.")
     # Randomise which branch the rule text lists first. A control, not a variant:
     # it changes only the wording, never which tool is correct.
     shuffle_order = bool(cfg.get("shuffle_branch_order", False))
@@ -501,7 +529,8 @@ def main():
             feedback, args.call_mode, cache_dir, args.headroom,
             variant=variant, tpd=my_tpd, lines=lines,
             deadline=deadline, arg_shift=arg_shift,
-            shuffle_branch_order=shuffle_order)
+            shuffle_branch_order=shuffle_order,
+            inject_at=inject_at, injections=injections)
         out = {"model": m, "records": recs, "stats": stats, "capped": capped,
                "lines": lines, "control": None, "plan": plan,
                "primary_alloc": my_primary, "control_alloc": my_control}
@@ -778,6 +807,7 @@ def main():
                   "measured_recovery": recov, "per_step": per_step,
                   "priors_used": {"r_syn": prior_rs, "r_sem": prior_rm},
                   "task_variant": variant, "arg_shift": arg_shift,
+                  "inject_at": inject_at, "injections": injections,
                   "shuffle_branch_order": shuffle_order,
                   "control_arm": control,
                   "structural_anomalies": anomalies,

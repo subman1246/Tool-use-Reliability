@@ -22,7 +22,9 @@ import json
 
 from tur.tasks.dag import generate_suite, generate_routing_suite
 from tur.harness.executor import FeedbackMode
-from tur.harness.runner import MockBackend, run_free, run_teacher_forced
+from tur.harness.runner import (MockBackend, run_free, run_teacher_forced,
+                                run_injection_pair, _expected_args_given_held,
+                                _expected_tool_given_ref)
 
 # Rough $/1M tokens (input, output) for cost accounting only. Every model in the
 # current suite is served on a free tier, hence 0.0 -- the entries exist so a
@@ -52,12 +54,12 @@ PRICE_PER_1M = {
 # half what the others get -- so it cannot be inferred from one observation.
 # TPD is the binding constraint for this workload by a wide margin.
 RATE_LIMITS = {
-    "groq/llama-3.1-8b-instant":    (14400, 6000, None),
+    "groq/llama-3.1-8b-instant":    (14400, 6000, 500_000),
     "groq/llama-3.3-70b-versatile": (1000, 12000, 100_000),
     "groq/qwen/qwen3.6-27b":        (1000, 8000, 200_000),
     "groq/openai/gpt-oss-20b":      (1000, 8000, 200_000),
     "groq/openai/gpt-oss-120b":     (1000, 8000, 200_000),
-    "groq/allam-2-7b":              (7000, 6000, None),
+    "groq/allam-2-7b":              (7000, 6000, 500_000),
     "gemini/gemini-2.5-flash":      (None, None, None),
 }
 
@@ -87,7 +89,7 @@ def _tokenizer():
 
 
 def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
-                variant="routing"):
+                variant="routing", inject_at=None, injections=None):
     """Exact call counts and measured prompt-token totals for one model.
 
     Drives the REAL run loops against a mock backend and counts tokens on the
@@ -101,7 +103,8 @@ def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
     sweep with the linear generator understated the token bill.
     """
     ntok, tok_name = _tokenizer()
-    gen = generate_routing_suite if variant == "routing" else generate_suite
+    gen = (generate_routing_suite if variant in ("routing", "injection")
+           else generate_suite)
     suite = gen(depths, per_depth, distractor_level)
 
     calls_min = 0
@@ -109,6 +112,43 @@ def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
 
     def perfect(task, step, ref, attempt):
         return task.gold[step].tool, {"ref": ref}, True
+
+    def perfect_conditional(task, step, ref, attempt):
+        # Injection prompts are counted with a policy that follows the rule on the
+        # value actually held. Tokens do not depend on whether the call is right,
+        # but a policy that errs would trip retries and inflate the count.
+        return (_expected_tool_given_ref(task, step, ref),
+                _expected_args_given_held(task, step, ref), True)
+
+    if variant == "injection":
+        for task in suite:
+            counted = {"calls": 0, "tokens": 0}
+            backend = MockBackend(perfect_conditional)
+            inner = backend.complete
+
+            def complete(messages, tools, mode, _c=counted, _inner=inner):
+                text = "".join(str(m.get("content", "")) for m in messages)
+                _c["tokens"] += ntok(text)
+                _c["calls"] += 1
+                return _inner(messages, tools, mode)
+
+            backend.complete = complete
+            for j in (inject_at or []):
+                if not 1 <= j < task.depth:
+                    continue
+                for mode in (injections or []):
+                    run_injection_pair(task, backend, j, mode, "uniform",
+                                       FeedbackMode.STRUCTURED, max_retries)
+            calls_min += counted["calls"]
+            prompt_tokens += counted["tokens"]
+        return {
+            "tasks": len(suite),
+            "tokenizer": tok_name,
+            "calls_min": calls_min * seeds,
+            "calls_worst": calls_min * (max_retries + 1) * seeds,
+            "prompt_tokens": prompt_tokens * seeds,
+            "output_tokens": calls_min * seeds * _OUTPUT_TOKENS_PER_CALL,
+        }
 
     for task in suite:
         for runner in (run_free, run_teacher_forced):
@@ -138,9 +178,10 @@ def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
 
 
 def estimate(depths, per_depth, seeds, max_retries, models, distractor_level=1,
-             days=3, headroom=0.80, variant="routing", control=None):
+             days=3, headroom=0.80, variant="routing", control=None,
+             inject_at=None, injections=None):
     s = count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
-                    variant)
+                    variant, inject_at, injections)
     if control:
         # The control arm is part of the bill, so it is part of the estimate.
         # Reporting only the primary arm would understate the sweep by exactly
@@ -303,7 +344,9 @@ def main():
              distractor_level=(args.distractors if args.distractors is not None
                                else cfg.get("distractor_level", 1)),
              days=args.days, headroom=args.headroom,
-             variant=cfg.get("task_variant", "routing"), control=ctrl)
+             variant=cfg.get("task_variant", "routing"), control=ctrl,
+             inject_at=[int(x) for x in (cfg.get("inject_at") or [])],
+             injections=list(cfg.get("injections") or []))
 
 
 if __name__ == "__main__":

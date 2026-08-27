@@ -1,0 +1,74 @@
+# PHASE 2: full linear-task null control.
+#
+# Run as:
+#   py scripts/run_real_suite.py --config config/linear_null.yaml --tag linear
+#   py scripts/report_real.py --tag linear
+#
+# WHAT THIS TESTS
+#
+# The paper's propagation result rests on the routing arm's internal evidence: a flat
+# teacher-forced profile against a rising free-running one, L_1 = 0 by construction, and
+# per-step divergence between arms. What it lacks is a direct null -- a task family where
+# propagation should NOT occur, run at the same depths and comparable sample sizes, showing
+# L_d near zero. Section 7 of the paper names this "the most consequential absence".
+#
+# The linear variant announces the tool order in the prompt and each argument is a verbatim
+# copy of the previous observation. A wrong value can therefore corrupt an argument but can
+# never change WHICH tool is correct, so a selection error has no downstream consequence and
+# the routing task's dependency structure -- the thing hypothesised to drive propagation --
+# is absent. If L_d stays near zero here while reaching 0.68 on routing at the same depths,
+# propagation is a property of the dependency structure rather than of the harness, the
+# scorer, or context length. If L_d is instead substantial here, that would contradict the
+# paper's account and must be reported as such.
+#
+# SCOPE: ONE MODEL.
+#
+# allam-2-7b only. Both Llama models were retired from the Groq free tier on 2026-08-27
+# (see docs/METHOD_NOTES_real_run.md), which removed llama-3.1-8b-instant -- the other model
+# carrying the main empirical claim -- from all further collection. This is therefore a
+# single-model causal check, not suite-wide validation, and must be reported that way.
+#
+# allam-2-7b is a reasonable subject even alone: it has the larger conditional-severity
+# estimate of the two main-claim models (+0.316 against llama-3.1-8b-instant's +0.149) and
+# the largest propagation loss in the suite (L_6 = 0.684), so it is the model on which a
+# null result is most informative -- there is the most to lose.
+#
+# SAMPLE SIZES
+#
+# Matched to what the routing arm actually achieved for this model ({1:60, 2:60, 4:65,
+# 6:40}), so the comparison is like-for-like at every depth.
+#
+# A depth-8 bin was specified initially and then dropped. It was the single most expensive
+# bin (~30% of the token bill at n=18) and the only depth with NO allam routing counterpart
+# to compare against, so it was the one bin that could not contribute a like-for-like null.
+# Dropping it also removed the need for the planner's nested-prefix downscaling: the first
+# configuration cost 1,090,012 tokens and had to be scaled to 0.88, delivering n={1:53,
+# 2:53, 4:57, 6:35}; without depth 8 the full requested n fits inside the same budget at
+# scale 1.0. The trim therefore BOUGHT precision at the depths that matter rather than
+# costing it -- depth 6 goes from 35 tasks to 40, and depth 6 is where routing shows its
+# largest loss (L_6 = 0.684) and so where a null result carries the most weight.
+task_variant: linear
+arg_shift: 0
+
+depths: [1, 2, 4, 6]
+per_depth: {1: 60, 2: 60, 4: 65, 6: 40}
+
+# no nested control arm: this config IS the control
+control_arm: null
+
+# allam's measured TPD is 500,000; 3 days at 80% headroom is 1.2M tokens, which covers the
+# allocation above with margin for the erring-policy cost multiplier.
+budget_days: 3
+
+distractor_level: 1
+seeds: 1
+feedback: structured
+call_mode: uniform
+max_retries: 1
+
+models:
+  - {name: "groq/allam-2-7b", family: "allam", scale: 7, provider: "groq", rpd: 7000, tpm: 6000, tpd: 500000}
+
+paths:
+  results: data/results
+  cache: data/cache
