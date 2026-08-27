@@ -88,8 +88,52 @@ work is execution (API budget and wall-clock time), not design.
   downstream outcomes). No config or task-generator support exists for this yet. This
   directly addresses review point #3 (the baseline/free-running contrast conflates more
   than propagation) by establishing propagation causally rather than observationally.
-- **Full linear-task null control** at the main suite's depths and sample sizes. Piloted
-  only (`§3.3`: "Pilot runs were degenerate... the full null arm was not executed").
+- **Full linear-task null control** at the main suite's depths and sample sizes —
+  **RUN, see results.** `config/linear_null.yaml`, tag `linear`, `allam-2-7b` ONLY (both
+  Llama models were retired from the Groq free tier on 2026-08-27, mid-project). Depths
+  {1,2,4,6}; a depth-8 bin was specified and dropped, being the most expensive bin and the
+  only depth with no allam routing counterpart to compare against. Cap-stopped at depth 6,
+  achieving n = {1:60, 2:60, 4:65, 6:31} of a planned {1:60, 2:60, 4:65, 6:40}; the
+  achieved counts are a nested prefix and are used as such.
+
+  **Result: this is NOT a clean null.** $L_d$ is small but its 89% CI excludes zero at
+  depths 4 and 6:
+
+  | depth | routing $L_d$ (published) | linear $L_d$ (new) |
+  |---|---|---|
+  | 1 | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] |
+  | 2 | +0.087 [+0.023, +0.160] | +0.008 [+0.000, +0.026] |
+  | 4 | +0.514 [+0.431, +0.596] | **+0.056 [+0.028, +0.086]** |
+  | 6 | +0.684 [+0.624, +0.745] | **+0.156 [+0.089, +0.229]** |
+
+  Same estimator and convention as the routing numbers (`bootstrap_L_ci`, paired,
+  task-level resampling, alpha=0.11), so the two columns are directly comparable.
+
+  **Interpretation.** The linear variant was described as a null, but it cannot be a null
+  for propagation in general, and this result makes that concrete. Its arguments are
+  verbatim copies of the previous observation, so a wrong value still carries forward —
+  what it removes is only the SELECTION dependency, i.e. a wrong value changing which tool
+  is correct next. So a nonzero $L_d$ here is mechanistically expected, and the arm should
+  be described as isolating the selection-dependency contribution rather than as a null.
+
+  What it does establish is a decisive separation: the routing and linear intervals do not
+  overlap at depth 4 or depth 6, and routing's loss at depth 6 is ~4.4x linear's
+  (0.684 vs 0.156). Propagation is therefore not an artifact of the harness, the scorer, or
+  context length — all of which are shared between the two arms — but roughly three
+  quarters of it at depth 6 is attributable to the selection dependency, not all of it.
+
+  Data: `data/results/linear_groq_allam-2-7b.jsonl`, `linear_meta.json`, `linear_idata.pkl`.
+
+  **Two caveats on this run.** (1) The hierarchical fit on the linear data is not usable:
+  every one of the 69 free-arm errors is in the `semantic` bucket, so there are zero
+  syntactic errors, `f_syn` is degenerate and the measured `r_syn` is `nan`. The runner
+  flagged this and the fit was still written; do not read it. The same degeneracy is
+  present in the published routing data (all errors `semantic` there too), which is a
+  known property of `error_type` being a syntactic/semantic axis rather than a
+  selection/argument one — it is not a new defect and no published analysis uses
+  `error_type` as a selection/argument decomposition. (2) `delta_1` on linear reproduces
+  the routing arm's boundary exactly: P(next correct | this one wrong) = 0.000 over 43
+  transitions, so semantic recovery is again zero as a measurement, not an estimate.
 - **Posterior predictive check** for the hierarchical model — **RUN, see results.**
   Implemented in `scripts/posterior_predictive_check.py`, which rebuilds the fitted model
   with one extra observed node and calls `pm.sample_posterior_predictive()` against the
