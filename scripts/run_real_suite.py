@@ -640,9 +640,32 @@ def main():
             print(f"    {name}: achieved {got}")
         print("    Their raw rows are still written; they are excluded from the")
         print("    hierarchical fit only, and the exclusion is recorded in meta.")
+
+    # Write EVERY model's raw rows before any early exit, including the models just
+    # excluded from the fit. The exclusion message above promises exactly this, and
+    # until now it was false whenever `usable` came out empty: the SystemExit below
+    # fired before the writing loop further down, so a cap-stopped run lost every
+    # record it had collected and the operator was told the opposite. A single-depth
+    # config -- the error-injection arm is one -- can never populate two depth bins,
+    # so it hit that path on every run and was unrecoverable except by replaying the
+    # response cache by hand.
+    #
+    # Rows written here are rewritten identically by the loop below for the usable
+    # models (same path, same "w" mode, same records), so this is a no-op for them.
+    for r in results:
+        path = f"{OUT_DIR}/{tag}_{r['model']['name'].replace('/', '_')}.jsonl"
+        with open(path, "w") as fh:
+            for rec in r["records"]:
+                fh.write(json.dumps(rec) + "\n")
+        if not r["records"]:
+            continue
+
     if not usable:
-        print("\nNo model has enough data to analyse yet. Re-run once the token")
-        print("allowance refills; cached work replays for free.")
+        print("\nNo model has enough data to fit a depth trend. Raw rows WERE "
+              "written and are usable")
+        print("for any analysis that does not need one -- a single-depth arm such as")
+        print("error injection is analysed from these rows directly. Re-run once the")
+        print("token allowance refills; cached work replays for free.")
         raise SystemExit(2)
     results = usable
 
