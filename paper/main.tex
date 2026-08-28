@@ -294,7 +294,7 @@ This establishes that the estimation and aggregation pipeline recovers configure
 
 This study uses synthetic integer-argument tasks, giving exact state transitions at the cost of ecological validity. The strongest empirical findings are carried by two 7--8B models; three stronger models are largely at ceiling. The unreachable-target proposition is general only through its explicit $\epsilon_k$ condition, while the empirical claim that our generator makes $\epsilon_k$ negligible depends on its hidden-state construction. Validation on natural-language arguments and stateful environments such as ToolSandbox or AppWorld is required before claiming prevalence in deployed agents.
 
-Three designed conditions were not executed: transformed arguments, randomized presentation order, and a calling-mode ablation. A linear-task control was executed on 	exttt{allam-2-7b} alone: at depth 6, $L_6=0.156$ $[0.089,0.229]$ against $0.684$ $[0.624,0.745]$ on routing, consistent with argument-value propagation persisting while the selection dependency is removed. These are material threats, not cosmetic extensions. In particular, \texttt{allam-2-7b}'s anti-correlation may depend on the parity/order presentation, and copy arguments do not test semantic argument construction. The unequal nested sample sizes preclude scale or family comparisons. The reported intervals require the task-level artifact for reproduction; call-level binomial intervals would be invalid because steps within a task are dependent.
+Three designed conditions were not executed: transformed arguments, randomized presentation order, and a calling-mode ablation. A linear-task control was executed on \texttt{allam-2-7b} alone: at depth 6, $L_6=0.156$ $[0.089,0.229]$ against $0.684$ $[0.624,0.745]$ on routing. The linear variant removes selection dependency but retains value copying; the residual loss is substantially smaller than routing's but excludes zero at depths 4 and 6, indicating that the baseline/free-running contrast captures effects beyond selection-error propagation alone. These are material threats, not cosmetic extensions. In particular, \texttt{allam-2-7b}'s anti-correlation may depend on the parity/order presentation, and copy arguments do not test semantic argument construction. The unequal nested sample sizes preclude scale or family comparisons. The reported intervals require the task-level artifact for reproduction; call-level binomial intervals would be invalid because steps within a task are dependent.
 
 % =====================================================================
 \section{Conclusion}
@@ -572,8 +572,9 @@ arms differ in whether an upstream error can change which tool is correct downst
 in whether a wrong value is carried forward. At depth 6 the routing loss is $4.4\times$ the
 linear one ($0.684$ against $0.156$), which is consistent with selection-error propagation
 accounting for the majority of total loss. The linear intervals at depths 4 and 6 both
-exclude zero, confirming that argument-value propagation is real and measurable even
-without routing; the linear arm is therefore a bound on the selection dependency's
+exclude zero, consistent with the baseline/free-running contrast capturing effects
+beyond selection-error propagation, though the specific mechanism is not resolved by
+this control alone; the linear arm is therefore a bound on the selection dependency's
 contribution rather than a null. The two families share the harness, the scorer and the
 prompt length at each depth, so neither of those explains the gap between them.
 
