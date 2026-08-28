@@ -82,12 +82,58 @@ work is execution (API budget and wall-clock time), not design.
 
 ### Not yet built
 
-- **Controlled error injection** (review's Priority 1, the most informative single
-  experiment per the review: inject a known error at position $j$, branch into
-  corrupted-continuation vs.\ corrected-continuation from the identical prefix, compare
-  downstream outcomes). No config or task-generator support exists for this yet. This
-  directly addresses review point #3 (the baseline/free-running contrast conflates more
-  than propagation) by establishing propagation causally rather than observationally.
+- **Controlled error injection** (review's Priority 1) — **BUILT AND RUNNING; PARTIAL
+  RESULTS BELOW.** `run_injection_pair()` in `src/tur/harness/runner.py`,
+  `config/error_injection.yaml`, `tests/test_error_injection.py`,
+  `scripts/report_injection.py`. Both members of a pair are built from a byte-identical
+  gold prefix and differ in exactly one substituted number, so treatment is assigned
+  externally rather than by the model. `allam-2-7b` only. Depth 6, positions
+  $j\in\{1,3,5\}$, two corruption modes.
+
+  **Partial at 36 of 60 tasks (214 complete pairs), scored from the response cache with
+  zero additional API calls.** The sweep holds records in memory until it finishes, so
+  these were recovered by replaying the cached responses through a cache-only backend.
+
+  **Corrected-branch validity check — PASSES.** The injection suite draws the same
+  `base_seed=1000` tasks as the routing run, so the clean branch can be compared against
+  the teacher-forced baseline on literally the same tasks. On the 36 overlapping tasks:
+
+  | position | corrected branch | baseline $p_j$ | diff |
+  |---|---|---|---|
+  | $j=1$ | 0.389 | 0.389 | +0.000 |
+  | $j=3$ | 0.500 | 0.500 | +0.000 |
+  | $j=5$ | 0.429 | 0.444 | -0.016 |
+
+  The corrected branch reproduces the baseline arm, so the contrast below is not
+  contaminated by a harness difference between the two constructions.
+
+  **Result 1 — the selection channel carries the effect.** `parity_flip` (substituted
+  value has opposite parity, so the correct tool changes): $\hat\pi = +0.178$
+  $[+0.056, +0.308]$ pooled, 47 pairs degrading against 28 improving.
+
+  **Result 2 — there is no argument-channel effect, and its sign is negative.**
+  `parity_preserving` (correct tool unchanged, only the argument differs):
+  $\hat\pi = -0.037$ $[-0.065, -0.009]$, with **0** pairs degrading and 4 improving.
+  Corrupting a value without changing which tool is correct does not hurt this model at
+  all. Note the interval excludes zero on the wrong side; at this n it is a handful of
+  pairs and should not be over-read, but it is not a degradation.
+
+  **Result 3 — the observational estimate is biased UPWARD.** The routing arm's
+  conditional severity for this model is $+0.316$, which lies **outside** the causal 89%
+  interval $[+0.056, +0.308]$. The observational number over-states severity by roughly
+  a factor of 1.8. This is expected in direction — in the free arm the model chooses its
+  own corruption, so whatever made it err upstream is still present downstream — but it
+  means the paper's severity figures are confounded, not merely uncertain.
+
+  **Result 4 — severity is NOT constant along the chain.** By position:
+  $j=1$: $+0.222$ $[+0.028,+0.417]$; $j=3$: $+0.278$ $[+0.056,+0.472]$;
+  $j=5$: $+0.029$ $[-0.229,+0.286]$. The depth-5 effect is indistinguishable from zero.
+  The step model assumes $\pi$ is constant along the chain; these data do not support
+  that, though the per-position intervals are wide at this n and the full run may narrow
+  them.
+
+  Data: `data/results/inject_partial_groq_allam-2-7b.jsonl`,
+  `inject_partial_injection_summary.json`. Superseded by the full run when it lands.
 - **Full linear-task null control** at the main suite's depths and sample sizes —
   **RUN, see results.** `config/linear_null.yaml`, tag `linear`, `allam-2-7b` ONLY (both
   Llama models were retired from the Groq free tier on 2026-08-27, mid-project). Depths

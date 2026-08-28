@@ -294,7 +294,7 @@ This establishes that the estimation and aggregation pipeline recovers configure
 
 This study uses synthetic integer-argument tasks, giving exact state transitions at the cost of ecological validity. The strongest empirical findings are carried by two 7--8B models; three stronger models are largely at ceiling. The unreachable-target proposition is general only through its explicit $\epsilon_k$ condition, while the empirical claim that our generator makes $\epsilon_k$ negligible depends on its hidden-state construction. Validation on natural-language arguments and stateful environments such as ToolSandbox or AppWorld is required before claiming prevalence in deployed agents.
 
-Four designed conditions were not executed: a linear-task null control, transformed arguments, randomized presentation order, and a calling-mode ablation. These are material threats, not cosmetic extensions. In particular, \texttt{allam-2-7b}'s anti-correlation may depend on the parity/order presentation, and copy arguments do not test semantic argument construction. The unequal nested sample sizes preclude scale or family comparisons. The reported intervals require the task-level artifact for reproduction; call-level binomial intervals would be invalid because steps within a task are dependent.
+Three designed conditions were not executed: transformed arguments, randomized presentation order, and a calling-mode ablation. A linear-task control was executed on 	exttt{allam-2-7b} alone: at depth 6, $L_6=0.156$ $[0.089,0.229]$ against $0.684$ $[0.624,0.745]$ on routing, consistent with argument-value propagation persisting while the selection dependency is removed. These are material threats, not cosmetic extensions. In particular, \texttt{allam-2-7b}'s anti-correlation may depend on the parity/order presentation, and copy arguments do not test semantic argument construction. The unequal nested sample sizes preclude scale or family comparisons. The reported intervals require the task-level artifact for reproduction; call-level binomial intervals would be invalid because steps within a task are dependent.
 
 % =====================================================================
 \section{Conclusion}
@@ -527,5 +527,54 @@ of the fit --- which under-estimates severity, so $(1-\pi)$ is too large --- and
 artifact peculiar to real data sitting at a scorer-imposed boundary. This is what
 distinguishes the finding from a claim that real models are simply harder to fit.
 
+
+\section{Linear-task control arm}
+\label{app:linear}
+
+The linear variant announces the tool order in the prompt, so the correct tool at each
+step is fixed in advance and cannot depend on the value carried in. What it retains is
+argument-value copying: each argument is a verbatim copy of the previous observation, so a
+wrong value still propagates forward. The arm was executed on \texttt{allam-2-7b} at the
+routing arm's depths and sample sizes. Depth 6 stopped on an exhausted daily token
+allowance at 31 of 40 planned tasks; the achieved counts are a nested prefix and are used
+as such.
+
+\begin{table}[h]
+\centering
+\caption{Invocation-pooled depth estimands for \texttt{allam-2-7b} on both task families.
+Intervals are 89\% paired bootstrap intervals over tasks, the same estimator and
+convention used for the routing arm.}
+\label{tab:linear-control}
+\footnotesize
+\begin{tabular}{@{}lrrlr@{}}
+\toprule
+\multicolumn{5}{c}{Linear (selection dependency removed)} \\
+\midrule
+depth $d$ & $\bar p_d$ & $\bar g_d$ & $L_d$ [89\% interval] & calls \\
+\midrule
+1 & 0.950 & 0.950 & \textbf{0.000} $[0.000,0.000]$ & 60 \\
+2 & 0.992 & 0.983 & 0.008 $[0.000,0.026]$ & 120 \\
+4 & 0.962 & 0.908 & \textbf{0.056} $[0.028,0.086]$ & 260 \\
+6 & 0.930 & 0.785 & \textbf{0.156} $[0.089,0.229]$ & 186 \\
+\midrule
+\multicolumn{5}{c}{Routing (selection dependency present)} \\
+\midrule
+1 & 0.533 & 0.533 & \textbf{0.000} $[0.000,0.000]$ & 60 \\
+2 & 0.383 & 0.350 & 0.087 $[0.022,0.163]$ & 120 \\
+4 & 0.427 & 0.208 & 0.514 $[0.429,0.600]$ & 260 \\
+6 & 0.475 & 0.150 & \textbf{0.684} $[0.624,0.745]$ & 240 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Linear tasks remove the selection dependency but retain argument-value copying, so the two
+arms differ in whether an upstream error can change which tool is correct downstream, not
+in whether a wrong value is carried forward. At depth 6 the routing loss is $4.4\times$ the
+linear one ($0.684$ against $0.156$), which is consistent with selection-error propagation
+accounting for the majority of total loss. The linear intervals at depths 4 and 6 both
+exclude zero, confirming that argument-value propagation is real and measurable even
+without routing; the linear arm is therefore a bound on the selection dependency's
+contribution rather than a null. The two families share the harness, the scorer and the
+prompt length at each depth, so neither of those explains the gap between them.
 
 \end{document}
