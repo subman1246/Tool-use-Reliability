@@ -71,6 +71,18 @@ designed, but because of the six-day scheduling gap documented in `§7 Limitatio
 | Transformed arguments | `config/transform_h4.yaml` | `tests/test_transform_variant.py` | Review's #9 (argument errors untested); whether conditional-severity estimates (0.149, 0.316) survive harder argument construction |
 | Native vs. uniform calling mode | `config/ablation_native.yaml` | (native mode probe-verified, per config header) | Whether measured unreliability is partly a calling-interface artifact |
 
+**Final status (2026-08-29): none of these three were executed, and they do not appear in
+the submission.** Two causes, both external to the design. Both Llama models were retired
+from the Groq free tier on 2026-08-27, mid-project, which removed `llama-3.1-8b-instant`
+(the model carrying the principal empirical claim) from all further collection and left
+the shuffle and transform arms without their most informative subject. The remaining
+`allam-2-7b` allowance was then consumed by the linear-null control and the error
+injection arm, which were judged higher value: they address the review's Priority 1 and
+its most consequential absence respectively. `ablation_native` was descoped earlier by
+explicit decision. The configs and tests remain in the repo and are ready to run; this is
+an execution gap, not a design gap, and Section 7 continues to name all three as
+unexecuted.
+
 To run any of these: `python scripts/run_real_suite.py --config config/<name>.yaml --tag <name>`,
 then `python scripts/report_real.py --tag <name>`. Each config file documents its own
 cost estimate and design rationale in its header comments.
@@ -280,3 +292,55 @@ project. It predates the construct-validity reframing, the formal proposition in
 deleted or rewritten in place, since it has historical value as a record of the
 project's earlier state. `paper/main.tex` is the current source of truth for the
 paper's content.
+
+### Reproducibility notes recorded at final verification (2026-08-29)
+
+- **Table 2's `allam-2-7b` intervals were built with a different bootstrap draw count
+  than `final_analysis.py` uses.** Three endpoints disagreed with the analysis output by
+  more than rounding: depth 2 upper (0.163 vs 0.160), depth 4 lower (0.429 vs 0.431) and
+  depth 4 upper (0.600 vs 0.596). The cause is NOT a different seed. Every call site uses
+  `seed=13`, but `final_analysis.py:105` passes `n_boot=2000` while
+  `run_real_suite.py:727`, `run_full_analysis.py:125` and `validate_routing.py:207` all
+  pass `n_boot=1000`, and `bootstrap_L_ci`'s own default is 2000. Re-running at
+  `n_boot=1000, seed=13` reproduces the original table values bit-for-bit, confirming the
+  table was generated from a 1000-draw path. The paper now carries the 2000-draw values,
+  corrected in Table 2 and in Appendix D's routing rows. **Anyone adding a new interval
+  should pass `n_boot` explicitly rather than relying on the call site's default, or the
+  same silent divergence recurs.** No point estimate, call count or conclusion was
+  affected; both readings agree on whether every interval excludes zero.
+
+- **The "0 of 580" denominator in Section 5.3 is intentional, not a miscount.** It is the
+  869 corrupted-context calls minus the 289 that occur at a terminal chain position,
+  where there is no downstream step on which reconvergence could be observed. Verified:
+  869 - 289 = 580 exactly. This is consistent with Section 5.2's treatment of
+  terminal-position errors as having no propagation opportunity.
+
+- **Conditional-on-state severity values (0.149, 0.316) are correct and reproduced in
+  `make_aggregate_figures.py`, but the 881-cache-read replay script that originally
+  generated them is not present in this repo; reconstructing it is a camera-ready item,
+  not a submission blocker.**
+
+---
+
+## Part 7 --- Final submission checklist (2026-08-29)
+
+| check | result |
+|---|---|
+| All 15 test modules pass | **yes** (15/15) |
+| Paper numbers match analysis output | **yes**, after correcting three `allam-2-7b` interval endpoints in Table 2 and Appendix D; 54/54 cells now agree within tolerance |
+| All figures reproducible from `make_aggregate_figures.py` | **yes**, all six regenerate, exit 0. Note `OUT = Path(".")`, so it must be run from `paper/` or the PDFs land in the repo root |
+| All data files present | **yes** (`real_ppc.json`, `official_ppc.json`, linear-null and injection records and summaries; raw records remain untracked under the existing `data/results/*` ignore rule) |
+| PDF compiles | **verified externally by the author**; no LaTeX toolchain is available in the agent environment, so this was not checked here |
+| Page count | 9 main + 4 appendix/refs (author-reported) |
+| em-dashes | **0** (5 were found and removed at final check: 3 table placeholders in Appendix E, 2 in Appendix C prose) |
+| main-body appendix refs | **0** (verified: zero `Appendix~\ref` occurrences before `\appendix`) |
+| Abstract | 1 paragraph (verified) |
+| PDF metadata title matches visible title | yes (author-reported) |
+| Undefined LaTeX references | **0** (29 labels, 10 refs, all resolve) |
+| Structural integrity | brace balance 0, even `$` count, all environments balanced, zero stray control characters |
+
+Verified independently in the agent environment: tests, analysis agreement, figure
+regeneration, data presence, em-dash count, appendix-pointer count, abstract paragraph
+count, reference resolution and structural integrity. Taken on the author's report and
+not checked here: PDF compilation, page count and PDF metadata title.
+

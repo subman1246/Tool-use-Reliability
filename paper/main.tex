@@ -190,8 +190,8 @@ depth $d$ & $\bar p_d$ & $\bar g_d$ & $L_d$ [89\% interval] & calls \\
 \multicolumn{5}{c}{\texttt{allam-2-7b}} \\
 \midrule
 1 & 0.533 & 0.533 & \textbf{0.000} $[0.000,0.000]$ & 60 \\
-2 & 0.383 & 0.350 & 0.087 $[0.022,0.163]$ & 120 \\
-4 & 0.427 & 0.208 & 0.514 $[0.429,0.600]$ & 260 \\
+2 & 0.383 & 0.350 & 0.087 $[0.022,0.160]$ & 120 \\
+4 & 0.427 & 0.208 & 0.514 $[0.431,0.596]$ & 260 \\
 6 & 0.475 & 0.150 & \textbf{0.684} $[0.624,0.745]$ & 240 \\
 \bottomrule
 \end{tabular}
@@ -523,7 +523,7 @@ predictive check alongside boundary-valued severity posteriors is therefore not 
 Second, the same targeted check fails on the simulated suite, where the generating policies
 \emph{were} configured to recover and the observed count is a substantial 1{,}648. The fit
 over-predicts there too, by roughly a factor of two. The over-prediction is thus a property
-of the fit --- which under-estimates severity, so $(1-\pi)$ is too large --- and not an
+of the fit, which under-estimates severity so $(1-\pi)$ is too large, and not an
 artifact peculiar to real data sitting at a scorer-imposed boundary. This is what
 distinguishes the finding from a claim that real models are simply harder to fit.
 
@@ -560,8 +560,8 @@ depth $d$ & $\bar p_d$ & $\bar g_d$ & $L_d$ [89\% interval] & calls \\
 \multicolumn{5}{c}{Routing (selection dependency present)} \\
 \midrule
 1 & 0.533 & 0.533 & \textbf{0.000} $[0.000,0.000]$ & 60 \\
-2 & 0.383 & 0.350 & 0.087 $[0.022,0.163]$ & 120 \\
-4 & 0.427 & 0.208 & 0.514 $[0.429,0.600]$ & 260 \\
+2 & 0.383 & 0.350 & 0.087 $[0.022,0.160]$ & 120 \\
+4 & 0.427 & 0.208 & 0.514 $[0.431,0.596]$ & 260 \\
 6 & 0.475 & 0.150 & \textbf{0.684} $[0.624,0.745]$ & 240 \\
 \bottomrule
 \end{tabular}
@@ -577,5 +577,67 @@ beyond selection-error propagation, though the specific mechanism is not resolve
 this control alone; the linear arm is therefore a bound on the selection dependency's
 contribution rather than a null. The two families share the harness, the scorer and the
 prompt length at each depth, so neither of those explains the gap between them.
+
+\section{Error-injection ablation}
+\label{app:injection}
+
+To test whether the observational propagation estimate reflects a causal effect of state
+corruption rather than an arm-construction confound, we injected controlled errors into
+otherwise identical trajectories for \texttt{allam-2-7b} (52 of 60 planned tasks, 316
+pairs). At a specified position $j\in\{1,3,5\}$, two branches diverge from the same
+prefix: a \emph{corrupted} branch where one tool output is replaced with a wrong value,
+and a \emph{corrected} branch where the original value is preserved. Both branches then
+continue through the same model. Because both share an identical prefix and differ in
+exactly one message, the contrast isolates state corruption from prompt-style,
+retry-history, and demonstration-quality differences.
+
+\paragraph{Validity check.} The corrected branch reproduces the baseline arm's accuracy
+exactly across all 40 overlapping tasks at every position tested ($+0.000$ at $j=1,3,5$),
+confirming the injection mechanism introduces no construction artifact.
+
+\paragraph{Two injection modes.} \texttt{parity\_flip} changes the carried value's parity,
+altering which tool the routing rule selects (a selection-channel corruption).
+\texttt{parity\_preserving} changes the value without changing its parity, so the correct
+tool is unchanged but the argument is wrong (an argument-channel corruption).
+
+\begin{table}[h]
+\centering
+\caption{Causal severity from controlled error injection on \texttt{allam-2-7b}, scored
+conditional-on-state. Intervals are 89\% paired bootstrap intervals resampling pairs.
+Discordant counts are the pairs in which exactly one branch was correct: $b$ favours the
+corrected branch, $c$ the corrupted one.}
+\label{tab:injection}
+\footnotesize
+\begin{tabular}{@{}lrrlr@{}}
+\toprule
+condition & corrected & corrupted & $\hat\pi$ [89\% interval] & $b/c$ \\
+\midrule
+\texttt{parity\_flip} (selection) & 0.411 & 0.304 & \textbf{$+0.108$} $[+0.006,+0.215]$ & 65/48 \\
+\texttt{parity\_preserving} (argument) & 0.411 & 0.443 & $-0.032$ $[-0.057,-0.013]$ & 0/5 \\
+\midrule
+observational (routing free arm) & n/a & n/a & $+0.316$ $[+0.066,+0.503]$ & n/a \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three findings follow. First, the observational estimate is biased upward by
+approximately $2.9\times$ ($+0.316$ against $+0.108$), and the observational value lies
+outside the causal interval. In the free-running arm the model selects its own
+corruptions, so whatever produced the upstream error remains present downstream; the
+injected contrast removes that dependence by assigning corruption externally. Second, the
+effect is confined to the selection channel: \texttt{parity\_preserving} corruption
+produced no degradation at any position, with zero pairs favouring the corrected branch,
+so a wrong argument value alone does not measurably impair this model's next call. Third,
+severity is not constant along the chain. The position profile is $+0.132$ at $j=1$,
+$+0.226$ at $j=3$ and $-0.038$ at $j=5$, of which only $j=3$ excludes zero. The step
+model of Section~\ref{sec:propagation-model} treats $\pi$ as position-independent, and
+these estimates do not support that assumption.
+
+These results are from a single model at one depth and a truncated allocation. The pooled
+selection-channel interval only narrowly excludes zero and one of three positions carries
+the effect, so the ablation establishes the direction of the observational bias more
+firmly than it establishes the magnitude of the causal severity. The eight tasks not
+collected would not change that. We report it as a single-model causal check on the
+estimand, not as suite-wide validation.
 
 \end{document}
