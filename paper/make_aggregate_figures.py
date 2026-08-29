@@ -253,24 +253,29 @@ def posterior_predictive() -> None:
     fig, ax = plt.subplots(figsize=(5.75, 2.6))
     ax.hist(rep, bins=np.arange(rep.min() - 0.5, rep.max() + 1.5, 2.0),
             color="#1a5276", edgecolor="none", alpha=0.85,
-            label=f"posterior predictive replicates (n={rep.size:,})")
+            label=f"replicates (n={rep.size:,})")
     ax.axvline(observed, color="#c0392b", linewidth=1.6,
                label=f"observed = {observed}")
     ax.set_xlabel(
         f"replicated canonical matches among the {n_pois} corrupted-context calls"
     )
     ax.set_ylabel("replicates")
-    ax.set_xlim(-4, rep.max() * 1.04)
-    ax.legend(frameon=False, loc="upper right")
+    ax.set_xlim(-4, rep.max() * 1.25)
+    ax.set_ylim(top=ax.get_ylim()[1] * 1.18)
+    ax.legend(frameon=False, loc="lower right", fontsize=8)
     ax.spines[["top", "right"]].set_visible(False)
     ax.tick_params(axis="both", width=0.8)
     ax.annotate(
         "no replicate reaches the observed value"
         + "\n(minimum %d; mean %.0f)" % (int(rep.min()), rep.mean()),
-        xy=(observed, ax.get_ylim()[1] * 0.55),
-        xytext=(rep.mean() * 0.42, ax.get_ylim()[1] * 0.72),
-        arrowprops=dict(arrowstyle="->", color="#c0392b", linewidth=0.9),
-        color="#c0392b", ha="left",
+        xy=(observed, ax.get_ylim()[1] * 0.03),
+        xycoords="data",
+        xytext=(0.06, 0.95),
+        textcoords="axes fraction",
+        arrowprops=dict(arrowstyle="->", color="#c0392b", linewidth=0.9,
+                         connectionstyle="arc3,rad=0.25",
+                         shrinkA=32, shrinkB=3),
+        color="#c0392b", ha="left", va="top", fontsize=8,
     )
     fig.savefig(OUT / "fig_ppc.pdf", bbox_inches="tight")
     plt.close(fig)

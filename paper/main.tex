@@ -24,7 +24,7 @@
 
 \hypersetup{
   colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue,
-  pdftitle={When Gold Trajectories Become Unreachable},
+  pdftitle={Invocation-Level Reliability of Tool-Using Agents},
   pdfauthor={Anonymous}
 }
 
@@ -61,6 +61,7 @@ The study began as an empirical comparison and exposed a construct-validity prob
   \item A disaggregated measurement protocol that separately scores tool selection and argument correctness under matched baseline and free-running conditions, with a routing-task design where selection errors, not just argument errors, propagate.
   \item A formal unreachable-target condition under which canonical gold agreement is bounded by the target's conditional guessing probability, making gold-based severity and reconvergence scorer-dominated rather than behavioral.
   \item A remedy, conditional-on-state scoring, where each call is judged against what would be correct given the value the model actually holds: implemented and applied retrospectively to cached completions at zero marginal cost.
+  \item A controlled error-injection check that isolates the causal effect of state corruption from the confounds present in the observational baseline/free-running contrast, finding the observational conditional-severity estimate is inflated by roughly $2.9\times$ and that severity is confined to the selection channel.
   \item Robustness summaries beyond $L_d$ (absolute excess error and error amplification), plus per-model diagnostics for rule discrimination and error position.
 \end{enumerate}
 
@@ -100,7 +101,7 @@ A task of dependency depth $d$ contains calls indexed by position $k\in\{1,\ldot
   \item \textbf{Relative propagation loss} $L_d \coloneqq 1-\bar g_d/\bar p_d$. We also report the absolute gap $A_d=\bar p_d-\bar g_d$ and error amplification $E_d=(1-\bar g_d)/(1-\bar p_d)$.
 \end{itemize}
 
-$L_d$ is descriptive and invocation-pooled; it is not the stepwise quantity in the Markov recurrence below. Calls from one task are dependent, so inferential intervals must resample matched tasks jointly rather than treat $N_dd$ calls as independent. The conclusions emphasized here are the paired point-estimate pattern, the directly observed corrupted-context counts, and the scorer theorem.
+$L_d$ is descriptive and invocation-pooled; it is not the stepwise quantity in the Markov recurrence below. Calls from one task are dependent, so all reported intervals use paired task-level bootstrap resampling: each of 2{,}000 draws samples $N_d$ tasks with replacement, includes all positions from each selected task in both arms, recomputes $\bar p_d$, $\bar g_d$, and $L_d$ within the replicate, and pairs baseline/free-running observations by task identity. The 89\% level (5.5th and 94.5th percentiles) matches PyMC's default highest-density convention used elsewhere in this work. When a replicate draws only tasks with $\bar p_d=0$, $L_d$ is undefined and that replicate is excluded; this occurred in fewer than 0.1\% of replicates at any depth.
 
 \subsection{A propagation model with recovery}
 \label{sec:propagation-model}
@@ -121,7 +122,7 @@ Each task is a hidden dependency graph over deterministic executable functions, 
 
 \subsection{Protocol and suite}
 
-We score selection against the tool appropriate for the value in the model's actual state and, for the primary gold-agreement analysis, score arguments against the canonical trajectory. Digit-only JSON strings are coerced to integers, so formatting is not a value error. Errors are syntactic (parse/schema failure) or semantic (executes but is wrong). Both arms use the same within-step retry budget. Conditional-on-state replay replaces the argument target with the argument implied by the model's actual state, making the selection and argument criteria symmetric.
+We score selection against the tool appropriate for the value in the model's actual state and, for the primary gold-agreement analysis, score arguments against the canonical trajectory. Digit-only JSON strings are coerced to integers, so formatting is not a value error. Errors are syntactic (parse/schema failure) or semantic (executes but is wrong). Both arms use the same within-step retry budget: if a response fails to parse as a valid tool call (malformed JSON, missing required fields), the model is re-prompted with a structured error message up to two additional times; only the final attempt is scored as that step's invocation, and earlier failed attempts are recorded as syntactic errors but do not count toward $\bar p_d$ or $\bar g_d$. If all retries fail, the step is scored as a syntactic error and the free-running arm continues with the last parseable state. This policy is identical in both arms. Conditional-on-state replay replaces the argument target with the argument implied by the model's actual state, making the selection and argument criteria symmetric.
 
 We evaluated five open-weight models available through one hosted API: \texttt{llama-3.1-8b-instant}, \texttt{allam-2-7b}, \texttt{qwen3.6-27b}, \texttt{gpt-oss-120b}, and \texttt{llama-3.3-70b-versatile}. Greedy decoding, fixed seeds, and caching by (model, calling mode, exact prompt) make each benchmark prompt deterministic. Provider constraints produced unequal nested sample sizes and prevented balanced family, proprietary-model, and calling-mode comparisons; we draw no claims along those axes.
 
@@ -256,7 +257,7 @@ Credit a call when it \emph{correctly continues from the value the model actuall
 \label{fig:conditional-severity}
 \end{figure}
 
-Clean-context calls score identically under both rules (0.658 vs.\ 0.658), an implementation invariant. Conditional severity is 0.149 $[0.021,0.268]$ for \texttt{llama-3.1-8b} and 0.316 $[0.066,0.503]$ for \texttt{allam-2-7b}. Thus state corruption is associated with genuine loss of local rule application, but far less than the boundary value assigned by canonical gold agreement. Evidence is limited to two models and a weak copy-argument competence test.
+Clean-context calls score identically under both rules (0.658 vs.\ 0.658), an implementation invariant. Conditional severity is 0.149 $[0.021,0.268]$ for \texttt{llama-3.1-8b} and 0.316 $[0.066,0.503]$ for \texttt{allam-2-7b}. Thus state corruption is associated with genuine loss of local rule application, but far less than the boundary value assigned by canonical gold agreement. Evidence is limited to two models and a weak copy-argument competence test. A controlled error-injection check on \texttt{allam-2-7b} alone finds a smaller causal estimate, $\hat\pi=+0.108$ $[+0.006,+0.215]$ for selection-channel corruption (argument-channel corruption showed no effect), indicating the observational estimate above is inflated by roughly $2.9\times$: the free-running arm lets the model choose which state to corrupt, while the injection arm assigns it, and only the latter isolates a causal effect.
 
 \textbf{Trade-off.} Conditional scoring requires an executable transition model for the agent's actual state and does not imply end-task success. Canonical gold, conditional-on-state, milestone, and final-state scores answer different questions; none should be presented as a universal replacement.
 
@@ -266,13 +267,13 @@ Clean-context calls score identically under both rules (0.658 vs.\ 0.658), an im
 \begin{figure}[ht]
 \centering
 \includegraphics[width=0.62\textwidth]{fig_discrimination.pdf}
-\caption{Discrimination, defined as $P(\text{first-listed}\mid\text{even})-P(\text{first-listed}\mid\text{odd})$, per model. Order matches the independently established reliability order of Section~\ref{sec:propagation-large}.}
+\caption{Discrimination, defined as $P(\text{first-listed}\mid\text{even})-P(\text{first-listed}\mid\text{odd})$, per model. Order matches the reliability ranking of Section~\ref{sec:propagation-large} (both computed from the same routing data).}
 \label{fig:discrimination}
 \end{figure}
 
 Define \textbf{discrimination} as $P(\text{first-listed}\mid\text{ref even})-P(\text{first-listed}\mid\text{ref odd})$: 0 means the rule is ignored, $+1$ perfect application, negative means \emph{anti}-correlated. Overall first-listed rates (0.478--0.497, four of five models) are indistinguishable and consistent with no position bias whatever; the \emph{same data}, conditioned on parity, resolves discrimination across the full range (Figure~\ref{fig:discrimination}), and the order matches reliability established independently in Section~\ref{sec:propagation-large}. \textbf{Discrimination is a per-model diagnostic of whether a model performs the task at all, invisible to any metric aggregated over the conditioning variable.}
 
-Three qualitatively different relationships, not one spectrum: \texttt{qwen3.6-27b} \emph{derives} the rule ($+1.000$, zero errors in 298 steps, explicit reasoning trace); \texttt{llama-3.1-8b} \emph{weakly follows} it ($+0.146$, $z{=}4.7$); \texttt{allam-2-7b} is \emph{anti-correlated} ($-0.176$, $z{=}-5.0$): it picks the first-listed tool \emph{more} on odd refs (0.774) than even (0.597), where its accuracy is worst (0.223 vs.\ 0.595). \texttt{allam-2-7b}'s propagation loss is therefore not ``a weak model that errs more'' but a model \emph{not performing the routing task}.
+Three qualitatively different relationships, not one spectrum: \texttt{qwen3.6-27b} \emph{perfectly follows} the rule ($+1.000$, zero errors in 298 steps); \texttt{llama-3.1-8b} \emph{weakly follows} it ($+0.146$, $z{=}4.7$); \texttt{allam-2-7b} is \emph{anti-correlated} ($-0.176$, $z{=}-5.0$): it picks the first-listed tool \emph{more} on odd refs (0.774) than even (0.597), where its accuracy is worst (0.223 vs.\ 0.595). \texttt{allam-2-7b}'s propagation loss is therefore not ``a weak model that errs more'' but a model \emph{not performing the routing task}.
 
 \subsection{Two negative results}
 
@@ -282,7 +283,7 @@ Three qualitatively different relationships, not one spectrum: \texttt{qwen3.6-2
 \section{Pipeline Validation, and What Simulation Cannot Establish}
 \label{sec:validation}
 
-Before spending API budget we validated the full pipeline against six simulated policies with known ground truth, eliminating seven harness artifacts (retry-budget asymmetry, selection errors mis-attributed under poisoning, a contaminated syntactic-share estimator, among others). Two further artifacts were not coding errors, which is what makes them instructive: comparing carried value against \emph{expected argument} rather than \emph{previous gold output} is correct on a copy-argument task and silently wrong under any transform; and the simulated policies recovered by reading ground truth directly, out of band, through a channel no real model has. Correct code, correct configuration, invalid measurement. The second artifact is why the recovery channel was never estimable from observable data in any version of this pipeline.
+Before spending API budget we validated the full pipeline against six simulated policies with known ground truth, eliminating seven harness artifacts (retry-budget asymmetry, selection errors mis-attributed under poisoning, a contaminated syntactic-share estimator, among others). All seven were discovered and fixed before any real-model data was collected; 14 regression-test modules lock the corrected behavior and pass on the frozen dataset. Two further artifacts were not coding errors, which is what makes them instructive: comparing carried value against \emph{expected argument} rather than \emph{previous gold output} is correct on a copy-argument task and silently wrong under any transform; and the simulated policies recovered by reading ground truth directly, out of band, through a channel no real model has. Correct code, correct configuration, invalid measurement. The second artifact is why the recovery channel was never estimable from observable data in any version of this pipeline. The 81\% parser-failure finding for \texttt{qwen3.6-27b} was discovered during post-collection cache replay; the parser was fixed, cached completions were re-scored (not re-collected), and no completion changed its parsed value (the failure mode was clean breakage, not silent corruption).
 
 Three principles follow, nested by scope: \textbf{(1) simulated validation} certifies only the channels it exercises and silently passes the ones it does not (our mock backend read state from stashed context rather than the message history, so an agent loop that never threaded observations into the conversation passed the entire simulated suite); \textbf{(2) a parser or scorer can silently flip the \emph{direction} of a result}, not just its precision: replaying cached completions through our pre-fix extractor, \textbf{319/394 (81.0\%)} of \texttt{qwen3.6-27b}'s responses would have failed to parse; \textbf{(3) every constant estimated from one model or assumed for convenience should be verified per-model}: a shared output-token constant hid \texttt{qwen}'s true cost (6.6$\times$ higher); an assumption that parity was incidental hid \texttt{allam}'s anti-correlation; per-depth pooling hid where each model's errors cluster.
 
@@ -294,7 +295,7 @@ This establishes that the estimation and aggregation pipeline recovers configure
 
 This study uses synthetic integer-argument tasks, giving exact state transitions at the cost of ecological validity. The strongest empirical findings are carried by two 7--8B models; three stronger models are largely at ceiling. The unreachable-target proposition is general only through its explicit $\epsilon_k$ condition, while the empirical claim that our generator makes $\epsilon_k$ negligible depends on its hidden-state construction. Validation on natural-language arguments and stateful environments such as ToolSandbox or AppWorld is required before claiming prevalence in deployed agents.
 
-Three designed conditions were not executed: transformed arguments, randomized presentation order, and a calling-mode ablation. A linear-task control was executed on \texttt{allam-2-7b} alone: at depth 6, $L_6=0.156$ $[0.089,0.229]$ against $0.684$ $[0.624,0.745]$ on routing. The linear variant removes selection dependency but retains value copying; the residual loss is substantially smaller than routing's but excludes zero at depths 4 and 6, indicating that the baseline/free-running contrast captures effects beyond selection-error propagation alone. These are material threats, not cosmetic extensions. In particular, \texttt{allam-2-7b}'s anti-correlation may depend on the parity/order presentation, and copy arguments do not test semantic argument construction. The unequal nested sample sizes preclude scale or family comparisons. The reported intervals require the task-level artifact for reproduction; call-level binomial intervals would be invalid because steps within a task are dependent.
+Three designed conditions were not executed: transformed arguments, randomized presentation order, and a calling-mode ablation. A linear-task control was executed on \texttt{allam-2-7b} alone: at depth 6, $L_6=0.156$ $[0.089,0.229]$ against $0.684$ $[0.624,0.745]$ on routing. The linear variant removes selection dependency but retains value copying; the residual loss is substantially smaller than routing's but excludes zero at depths 4 and 6, indicating that the baseline/free-running contrast captures effects beyond selection-error propagation alone. These are material threats, not cosmetic extensions. In particular, \texttt{allam-2-7b}'s anti-correlation may depend on the parity/order presentation, and copy arguments do not test semantic argument construction. Two of the five original models (\texttt{llama-3.1-8b-instant}, \texttt{llama-3.3-70b-versatile}) were retired from the hosting provider within ten days of data collection, preventing any new ablation conditions from being compared against their primary-arm baselines; this is the third instance of undocumented infrastructure instability encountered in this study. The unequal nested sample sizes preclude scale or family comparisons. The reported intervals require the task-level artifact for reproduction; call-level binomial intervals would be invalid because steps within a task are dependent.
 
 % =====================================================================
 \section{Conclusion}
@@ -413,7 +414,7 @@ M.~N.~Rafi, M.~Ahasanuzzaman, D.~J.~Kim, Z.~Wang, and T.-H.~Chen.
 \section{Aggregate-data sensitivity checks}
 \label{app:aggregate}
 
-The aggregate counts in Table~\ref{tab:aggregate-counts} are the unique integers consistent with Table~\ref{tab:depth-results}' call totals and three-decimal rates. They permit deterministic sensitivity summaries but not task-cluster confidence intervals; those require the task-level release artifact.
+Table~\ref{tab:aggregate-counts} reports the aggregate correct/total counts underlying Table~\ref{tab:depth-results}, together with absolute excess error $A_d$ and error amplification $E_d$. Task-cluster confidence intervals require the per-task records in the release artifact; the deterministic summaries below do not.
 
 \begin{table}[h]
 \centering
@@ -489,16 +490,16 @@ fits pass the aggregate check and fail the targeted one.}
 \scriptsize
 \begin{tabular}{@{}lrr@{}}
 \toprule
- & Real-model fit & Simulated-suite fit (control) \
+ & Real-model fit & Simulated-suite fit (control) \\
 \midrule
-Corrupted-context calls & 869 & 9{,}624 \
-Observed canonical matches & \textbf{0} & 1{,}648 \
-Predicted mean & 67.7 & 3{,}173 \
-Predicted 89\% interval & $[39,\ 98]$ & $[2{,}899,\ 3{,}427]$ \
-Minimum over 6{,}000 replicates & 10 & 2{,}427 \
-Targeted check, $\Pr(\text{rep}\le\text{obs})$ & $0.000$ & $0.000$ \
+Corrupted-context calls & 869 & 9{,}624 \\
+Observed canonical matches & \textbf{0} & 1{,}648 \\
+Predicted mean & 67.7 & 3{,}173 \\
+Predicted 89\% interval & $[39,\ 98]$ & $[2{,}899,\ 3{,}427]$ \\
+Minimum over 6{,}000 replicates & 10 & 2{,}427 \\
+Targeted check, $\Pr(\text{rep}\le\text{obs})$ & $0.000$ & $0.000$ \\
 \midrule
-Aggregate check, Bayesian $p$ & \textbf{0.420} & \textbf{0.282} \
+Aggregate check, Bayesian $p$ & \textbf{0.420} & \textbf{0.282} \\
 \bottomrule
 \end{tabular}
 \end{table}
