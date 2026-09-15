@@ -322,6 +322,25 @@ class LiteLLMBackend:
                                             "arguments": tc["arguments"]}}
                 else:
                     result = {"text": msg.get("content") or ""}
+                    # Reasoning models (gpt-oss) return their answer in `content` and
+                    # their scratchpad in a separate `reasoning` field. Usually content
+                    # is populated and this is inert. But 13 of 72 scored calls in the
+                    # BFCL pilot came back with content == "" and finish_reason ==
+                    # "stop" -- not truncated, just empty -- and those were scored as
+                    # parse failures, which depresses both arms' rates and makes L_d
+                    # unreliable. The cache stored only the extracted text, so the cause
+                    # could not be diagnosed after the fact.
+                    #
+                    # Captured, NOT substituted: an answer the model left out of
+                    # `content` is not an answer it gave, and silently promoting the
+                    # scratchpad would invent a call the model never emitted. This only
+                    # makes the case countable and diagnosable on the next run.
+                    if not result["text"]:
+                        reasoning = (msg.get("reasoning")
+                                     or msg.get("reasoning_content") or "")
+                        result["empty_content"] = True
+                        if reasoning:
+                            result["reasoning"] = str(reasoning)[:4000]
                 # finish_reason is recorded because it is the only DIRECT evidence
                 # that a completion was cut off at a token ceiling rather than
                 # ending naturally. Without it, truncation can only be inferred
