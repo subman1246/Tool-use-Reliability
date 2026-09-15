@@ -605,6 +605,15 @@ class StepRecord:
     inject_at: int | None = None
     injection: str | None = None
     pair_id: str | None = None
+    # Recovery arm. None/False on every other run mode.
+    used_resync: bool = False        # this step WAS the resync call
+    resync_remaining: int | None = None
+    diverged_in: bool = False        # held value differed from canonical entering this step
+    gold_ref: int | None = None      # canonical value for this step, for the three-way split
+    # The value carried OUT of this step. held_ref is the value carried IN, matching
+    # run_free's `carried_in`; recording only that would leave the final state of a
+    # trajectory unrecoverable, which is exactly what the recovery verdict needs.
+    held_out: int | None = None
 
 
 # --------------------------- prompt ---------------------------
@@ -1025,3 +1034,173 @@ def run_injection_pair(task, backend: Backend, inject_at: int,
             truncated=was_truncated,
             inject_at=inject_at, injection=corruption, pair_id=pair_id))
     return records
+
+
+# --------------------------- recovery arm ---------------------------
+#
+# Scores the same trajectory THREE ways, which is the entire point of the arm. Section 7
+# says the project cannot currently distinguish "continuing competently from an off-gold
+# state" from "actually recovering". Those two differ only when the task offers a route
+# back, so until now they have been the same number wearing two names.
+#
+#   canonical gold agreement   did the call match the gold trajectory
+#                              (selection_matches_gold + args_correct_strict)
+#   conditional-on-state       was the call correct GIVEN the value actually held
+#                              (correct_given_state) -- the existing remedy
+#   genuine recovery           did the trajectory get back to the canonical state and
+#                              finish the ORIGINAL task, verified against the task's true
+#                              final output, not merely continued plausibly
+#
+# The third is a TRAJECTORY-level property, not a per-call one, so it is computed by
+# recovery_outcome() over a finished task rather than recorded per step.
+#
+# check_state is intercepted here rather than dispatched through executor.execute,
+# because its value depends on which step the agent is on and ToolSpec.run is a pure
+# function of its arguments. See tur/tasks/recovery.py.
+
+
+def run_recovery(task, backend: Backend, call_mode: str = "uniform",
+                 feedback: FeedbackMode = FeedbackMode.STRUCTURED,
+                 max_retries: int = 1,
+                 schema_style: str = "verbose") -> list[StepRecord]:
+    """Free-running, but the agent may call check_state once to repair its state."""
+    from tur.tasks.recovery import RESYNC_TOOL, canonical_ref_at
+
+    records: list[StepRecord] = []
+    messages = [{"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": _task_intro(task, schema_style)}]
+    rule = getattr(task, "recovery_rule_text", lambda: "")()
+    if rule:
+        messages.append({"role": "user", "content": rule})
+
+    held = task.seed_value
+    remaining = getattr(task, "resync_budget", 1)
+    t = 0
+    guard = 0
+    # A resync does not advance the step, so the loop is bounded by calls rather than by
+    # steps. The guard is the budget: depth steps plus the resyncs allowed, plus slack for
+    # a refused resync being retried once. Without it a model that emits check_state
+    # forever would spin.
+    max_calls = task.depth + getattr(task, "resync_budget", 1) + 2
+
+    while t < task.depth and guard < max_calls:
+        guard += 1
+        gold_ref = canonical_ref_at(task, t)
+        diverged_in = (held != gold_ref)
+        held_in = held          # snapshot: `held` is overwritten by execution below
+
+        attempts = 0
+        recovered_syn = False
+        final_score = None
+        executed = False
+        final_call = None
+        was_resync = False
+
+        for attempt in range(max_retries + 1):
+            attempts += 1
+            ctx = {"task": task, "step": t, "ref": held, "attempt": attempt}
+            messages.append({"role": "user", "content": "[step " + str(t) + "]",
+                             "_ctx": ctx})
+            resp = backend.complete(messages, task.schema_view(), call_mode)
+            fr = resp.get("finish_reason") if isinstance(resp, dict) else None
+            was_truncated = (fr == "length") if fr is not None else None
+            call = parse_response(resp, call_mode)
+            final_call = call
+
+            if call.parse_ok and call.tool == RESYNC_TOOL:
+                was_resync = True
+                if remaining > 0:
+                    remaining -= 1
+                    held = gold_ref          # state repaired: back on the canonical value
+                    messages.append({"role": "assistant",
+                                     "content": json.dumps({"tool": RESYNC_TOOL,
+                                                            "args": {}})})
+                    messages.append({"role": "user",
+                                     "content": "result: " + str(gold_ref)})
+                else:
+                    messages.append({"role": "user",
+                                     "content": "ToolError: check_state budget exhausted"})
+                executed = True
+                break
+
+            ex = execute(task, call.tool or "", call.args or {}, feedback)
+            score = score_step(
+                call, task.gold[t], ex.schema_valid, ex.known_tool,
+                expected_tool=_expected_tool_given_ref(task, t, held),
+                expected_args=_expected_args_given_held(task, t, held))
+            final_score = score
+            if ex.ok:
+                executed = True
+                if attempt > 0 and score.correct:
+                    recovered_syn = True
+                messages.append({"role": "assistant",
+                                 "content": json.dumps({"tool": call.tool,
+                                                        "args": call.args})})
+                messages.append({"role": "user", "content": ex.feedback})
+                held = ex.output
+                break
+            messages.append({"role": "user", "content": ex.feedback})
+
+        if was_resync:
+            # The resync call itself is recorded so the cost is visible in the data, but
+            # it is not scored as a step attempt: it is not an answer to the step.
+            records.append(StepRecord(
+                task.task_id, task.depth, t, "recovery", call_mode, RESYNC_TOOL,
+                False, False, False, False, "resync", attempts, True, not diverged_in,
+                False, stalled_in=False,
+                backend_error=bool(final_call and final_call.is_backend_error),
+                args_correct_given_state=False, correct_given_state=False,
+                held_ref=held_in, first_listed_even=_first_listed_even(task, t),
+                truncated=None, used_resync=True, resync_remaining=remaining,
+                diverged_in=diverged_in, gold_ref=gold_ref, held_out=held))
+            continue        # same step, retried with repaired state
+
+        if final_score is None:
+            break
+        records.append(StepRecord(
+            task.task_id, task.depth, t, "recovery", call_mode,
+            final_call.tool if final_call else None,
+            final_score.selection_correct, final_score.selection_matches_gold,
+            final_score.args_correct_strict, final_score.args_correct_soft,
+            final_score.error_type.value, attempts, executed,
+            context_clean_in=not diverged_in, recovered=recovered_syn, stalled_in=False,
+            backend_error=bool(final_call and final_call.is_backend_error),
+            args_correct_given_state=final_score.args_correct_given_state,
+            correct_given_state=final_score.correct_given_state,
+            held_ref=held_in, first_listed_even=_first_listed_even(task, t),
+            truncated=was_truncated, used_resync=False, resync_remaining=remaining,
+            diverged_in=diverged_in, gold_ref=gold_ref, held_out=held))
+        t += 1
+
+    return records
+
+
+def recovery_outcome(task, records: list[StepRecord]) -> dict:
+    """Trajectory-level three-way verdict for one recovery task.
+
+    `recovered` is the strict reading and the one the paper needs: the trajectory left the
+    canonical path at some point AND finished holding the task's true final value. Merely
+    ending on a value that is self-consistent with the agent's own wrong history does not
+    count -- that is the confusion this whole arm exists to remove.
+    """
+    steps = [r for r in records if not r.used_resync]
+    if not steps:
+        return {"task_id": task.task_id, "depth": task.depth, "completed": False,
+                "diverged": False, "recovered": False, "used_resync": False,
+                "gold_agreement": 0.0, "conditional": 0.0}
+    diverged = any(r.diverged_in for r in records)
+    used = any(r.used_resync for r in records)
+    completed = len(steps) == task.depth
+    final_gold = task.gold[-1].output
+    # the value carried out of the last scored step
+    final_held = steps[-1].held_out
+    recovered = bool(diverged and completed and final_held == final_gold)
+    return {
+        "task_id": task.task_id, "depth": task.depth, "completed": completed,
+        "diverged": diverged, "used_resync": used, "recovered": recovered,
+        "gold_agreement": sum(1 for r in steps
+                              if r.selection_matches_gold and r.args_correct_strict)
+                          / len(steps),
+        "conditional": sum(1 for r in steps if r.correct_given_state) / len(steps),
+        "n_steps": len(steps), "n_resync": sum(1 for r in records if r.used_resync),
+    }

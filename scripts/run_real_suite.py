@@ -40,7 +40,7 @@ from tur.tasks.dag import generate_suite, generate_routing_suite
 from tur.harness.cache import Cache
 from tur.harness.executor import FeedbackMode
 from tur.harness.runner import (run_free, run_teacher_forced, LiteLLMBackend,
-                                run_injection_pair,
+                                run_injection_pair, run_recovery,
                                 RateLimiter, DailyCapReached)
 from tur.analysis.aggregate import (load_records, aggregate_by_depth,
                                     stats_to_arrays, bootstrap_L_ci,
@@ -90,10 +90,12 @@ def log(lines: list[str], msg: str) -> None:
 
 def _suite_for(variant: str, depths, per_depth, distractor_level: int, seed: int,
                arg_shift: int = 0, shuffle_branch_order: bool = False):
-    # Injection is an intervention ON the routing task, not a task family of its own:
-    # it needs a branch structure for a corrupted value to be able to change which
-    # tool is correct, so it draws from the same generator as the routing arm.
-    if variant in ("routing", "injection"):
+    # Injection and recovery are both interventions ON the routing task rather than
+    # task families of their own: each needs the branch structure, so both draw from
+    # the same generator as the routing arm. Recovery additionally wraps each task so
+    # the repair tool appears in the schema, done below rather than here so the plain
+    # suite stays the single source of task identity.
+    if variant in ("routing", "injection", "recovery"):
         return generate_routing_suite(depths, per_depth, distractor_level,
                                       base_seed=seed * 31 + 1000,
                                       arg_shift=arg_shift,
@@ -312,6 +314,15 @@ def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
                                 task, backend, j, mode, call_mode, feedback,
                                 max_retries)
                     f, t = pairs, []
+                elif variant == "recovery":
+                    # to_recovery_task copies the gold trajectory rather than
+                    # regenerating it, so the recovery arm is comparable to the
+                    # free-running arm task-for-task, not merely depth-for-depth.
+                    from tur.tasks.recovery import to_recovery_task
+                    rtask = to_recovery_task(task)
+                    f = run_recovery(rtask, backend, call_mode, feedback, max_retries)
+                    t = run_teacher_forced(task, backend, call_mode, feedback,
+                                           max_retries)
                 else:
                     f = run_free(task, backend, call_mode, feedback, max_retries)
                     t = run_teacher_forced(task, backend, call_mode, feedback,

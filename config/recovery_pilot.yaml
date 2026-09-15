@@ -1,0 +1,70 @@
+﻿# PHASE 1: recovery-enabled routing task.
+#
+#   py scripts/estimate_cost.py --config config/recovery.yaml --days 3
+#   py scripts/run_real_suite.py --config config/recovery.yaml --tag recovery
+#
+# WHAT THIS TESTS
+#
+# Section 7 states that no task design in this project gives the agent a path back to the
+# original goal after a divergence. The consequence is that "recovery" has never been
+# measurable here: canonical gold agreement pins it at zero by construction, because after
+# a divergence the gold value is unreachable, and conditional-on-state scoring measures
+# something else entirely -- whether the agent continues COMPETENTLY from a wrong state.
+# With no route back in the task, those two cannot be told apart.
+#
+# This variant adds one tool, check_state, which returns the true canonical value for the
+# current step. It costs a call and does not advance the step, and it is usable once per
+# task. A one-shot budget keeps "did the agent repair" binary and removes the degenerate
+# policy of resyncing before every step, which would silently convert the free-running arm
+# into the teacher-forced arm.
+#
+# Each task is then scored three ways: canonical gold agreement, conditional-on-state, and
+# GENUINE RECOVERY -- did the trajectory return to the canonical state and finish the
+# original task, verified against the task's true final output rather than against the
+# agent's own self-consistent but wrong history.
+#
+# VALIDITY FIRST
+#
+# tests/test_recovery_mechanism.py runs before any budget is spent and asserts the two
+# ways this arm could produce publishable-looking nonsense: that an always-repair policy
+# actually recovers the original trajectory (100% on mock), and that a never-repair policy
+# is STEP-FOR-STEP IDENTICAL to the existing free-running arm. The second is what makes
+# recovery-arm numbers comparable to the free-running numbers already in the paper. It
+# caught a real defect on first run: held_ref was being recorded as the value carried OUT
+# of a step rather than IN, which made every step differ from run_free.
+#
+# SCOPE: ONE MODEL
+#
+# allam-2-7b. It is the only model in the frozen suite that is still reachable AND has a
+# routing baseline: llama-3.1-8b-instant and llama-3.3-70b-versatile were retired
+# 2026-08-27, and qwen/qwen3.6-27b was found retired on 2026-08-29. gpt-oss-120b is
+# reachable but sits at ceiling (L_6 = 0.030), so it barely diverges and would contribute
+# almost no recovery opportunities. A single-model causal check, reported as such.
+#
+# DEPTHS
+#
+# Matched to allam's achieved routing allocation so the recovery arm is comparable
+# task-for-task with the free-running arm already collected. Depth 1 is retained as the
+# implementation invariant (L_1 = 0 by construction) even though no divergence is
+# possible there and so no recovery opportunity exists.
+task_variant: recovery
+arg_shift: 0
+
+depths: [4, 6]
+per_depth: {4: 8, 6: 8}
+
+control_arm: null
+budget_days: 3
+
+distractor_level: 1
+seeds: 1
+feedback: structured
+call_mode: uniform
+max_retries: 1
+
+models:
+  - {name: "groq/allam-2-7b", family: "allam", scale: 7, provider: "groq", rpd: 7000, tpm: 6000, tpd: 500000}
+
+paths:
+  results: data/results
+  cache: data/cache

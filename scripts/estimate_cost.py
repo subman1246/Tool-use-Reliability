@@ -103,7 +103,7 @@ def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
     sweep with the linear generator understated the token bill.
     """
     ntok, tok_name = _tokenizer()
-    gen = (generate_routing_suite if variant in ("routing", "injection")
+    gen = (generate_routing_suite if variant in ("routing", "injection", "recovery")
            else generate_suite)
     suite = gen(depths, per_depth, distractor_level)
 
@@ -141,6 +141,39 @@ def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
                                        FeedbackMode.STRUCTURED, max_retries)
             calls_min += counted["calls"]
             prompt_tokens += counted["tokens"]
+        return {
+            "tasks": len(suite),
+            "tokenizer": tok_name,
+            "calls_min": calls_min * seeds,
+            "calls_worst": calls_min * (max_retries + 1) * seeds,
+            "prompt_tokens": prompt_tokens * seeds,
+            "output_tokens": calls_min * seeds * _OUTPUT_TOKENS_PER_CALL,
+        }
+
+    if variant == "recovery":
+        # A recovery task carries one extra tool in its schema and may spend extra
+        # calls on repair. Costed with a policy that never repairs, which is the
+        # LOWER bound: a model that uses the tool costs more. The estimate is
+        # labelled as such rather than quietly assuming no one repairs.
+        from tur.tasks.recovery import to_recovery_task
+        from tur.harness.runner import run_recovery
+        for task in suite:
+            rtask = to_recovery_task(task)
+            for runner, tgt in ((run_recovery, rtask), (run_teacher_forced, task)):
+                counted = {"calls": 0, "tokens": 0}
+                backend = MockBackend(perfect)
+                inner = backend.complete
+
+                def complete(messages, tools, mode, _c=counted, _inner=inner):
+                    text = "".join(str(m.get("content", "")) for m in messages)
+                    _c["tokens"] += ntok(text)
+                    _c["calls"] += 1
+                    return _inner(messages, tools, mode)
+
+                backend.complete = complete
+                runner(tgt, backend, "uniform", FeedbackMode.STRUCTURED, max_retries)
+                calls_min += counted["calls"]
+                prompt_tokens += counted["tokens"]
         return {
             "tasks": len(suite),
             "tokenizer": tok_name,
