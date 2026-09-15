@@ -1,13 +1,17 @@
 # Flagged for a later paper pass
 
-Things found during the expansion phases that the paper should account for. **Noted, not
-drafted** — deliberately. Each is recorded with enough detail and provenance to write from
-later, once there is a fuller picture; none has a sentence written for it yet, because
-drafting early tends to freeze a claim before the evidence that shapes it has arrived.
+Things found during the expansion phases that the paper should account for. Each is
+recorded with enough detail and provenance to write from, rather than drafted early:
+drafting before the shaping evidence arrives tends to freeze a claim prematurely.
+
+**Status: items 1 and 2 are APPLIED** in commit `4b9a7fe` and compile clean (0 errors, 0
+overfull boxes, 14 pages, 9-page main-content boundary held). They are kept here as the
+provenance record for what was written and why — do not re-draft them. Item 3 remains
+outstanding, pending the repair arm's full result.
 
 ---
 
-## 1. Related Work mischaracterises BFCL (factual correction)
+## 1. Related Work mischaracterises BFCL (factual correction) — APPLIED `4b9a7fe`
 
 **Where:** Section 2, the paragraph beginning *"Not all agent evaluation uses one canonical
 trajectory."* It lists τ-bench (final state), AppWorld (state-based unit tests) and
@@ -39,9 +43,14 @@ side of it wrong weakens the boundary the central result depends on.
 **Supporting material:** `docs/NOTE_bfcl_scorer_structure.md` has the full reading with
 quoted source.
 
+**As shipped:** BFCL was removed from the fixed-reference sentence and added to the
+alternative-trajectory paragraph, with the clause *"notwithstanding that it distributes one
+reference call sequence per task"* — the `possible_answer` file is what makes BFCL look
+fixed-reference from outside, so the objection is pre-empted rather than invited.
+
 ---
 
-## 2. Limitations: the local-quantized equivalence gate failed, and by how much
+## 2. Limitations: the local-quantized equivalence gate failed, and by how much — APPLIED `4b9a7fe`
 
 **Where:** Limitations, alongside the existing model-retirement count.
 
@@ -75,9 +84,17 @@ provider retirement as much as about quantization.
 **Provenance:** `data/results/localval_equivalence.json`,
 `scripts/compare_local_vs_groq.py`.
 
+**As shipped, plus two corrections this pulled in.** The retirement count went from two
+models to three (`qwen3.6-27b`, verified by live probe) and the instance count from third
+to fourth. That tally cited stale model identifiers as a prior instance, which appeared
+nowhere in the paper — so Data Collected (`sec:data`) now states plainly that the
+originally specified Qwen2.5/Llama-3.1-instruct generation had been retired before the
+first run. All four counted instances now have a referent; previously a reader could not
+reconstruct the number.
+
 ---
 
-## 3. Elected repair is chosen by prompt position, not by state
+## 3. Elected repair is chosen by prompt position, not by state — OUTSTANDING
 
 Already written up in full at `docs/FINDING_elected_repair.md`. Flagged here so the paper
 pass does not miss it: 14/16 tasks called the repair tool when the rule was stated last
