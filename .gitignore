@@ -10,3 +10,6 @@ data/cache/
 *.egg-info/
 build/
 dist/
+
+# Vendored third-party benchmark data: fetched by scripts/fetch_bfcl.py, not ours to redistribute
+data/bfcl/

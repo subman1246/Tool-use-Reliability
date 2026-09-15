@@ -1,0 +1,16 @@
+The .py files in this directory, other than __init__.py, are vendored verbatim from the
+Gorilla project's Berkeley Function Calling Leaderboard (BFCL):
+
+  https://github.com/ShishirPatil/gorilla
+  berkeley-function-call-leaderboard/bfcl_eval/eval_checker/multi_turn_eval/func_source_code/
+  Licensed under the Apache License, Version 2.0.
+
+Vendored rather than imported because BFCL's multi-turn dependency structure runs through
+SIMULATOR STATE rather than through a value carried from one call's output into the next
+call's argument. Scoring a call conditional-on-the-state-actually-held -- the paper's
+remedy for fixed-gold scoring after a divergence -- therefore requires really executing
+the environment, both along the gold trajectory and along the model's own. Schemas alone
+(the multi_turn_func_doc entries in the HuggingFace dataset) are not sufficient for that.
+
+They are unmodified. Any adaptation lives in ../bfcl.py so that a future re-vendor is a
+straight file replacement.
