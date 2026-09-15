@@ -608,6 +608,7 @@ class StepRecord:
     # Recovery arm. None/False on every other run mode.
     used_resync: bool = False        # this step WAS the resync call
     resync_remaining: int | None = None
+    resync_charged: bool | None = None   # did this resync consume the repair budget
     diverged_in: bool = False        # held value differed from canonical entering this step
     gold_ref: int | None = None      # canonical value for this step, for the three-way split
     # The value carried OUT of this step. held_ref is the value carried IN, matching
@@ -686,11 +687,25 @@ def _task_intro(task, schema_style: str = "verbose") -> str:
         else:
             ref_rule = ("Each later step's ref equals the numeric result "
                         "returned by the previous tool.")
+        # The repair rule, when the task has one, is stated HERE rather than as its own
+        # message. Appended as the last turn before [step 0] it sat immediately before the
+        # first decision, and a 7B model reflexively spent its one repair on step 0 in 14
+        # of 16 pilot tasks -- where the held value equals the canonical value by
+        # construction, so the call returned the number already in the prompt. Stating it
+        # inside the task description, with the output format still last, describes the
+        # tool without cueing it.
+        # Inserted as its own paragraph ONLY when the task has a repair rule. A task
+        # without one must produce a byte-identical intro to before this change:
+        # otherwise every routing and injection prompt shifts, which would invalidate the
+        # response cache and make the recovery arm incomparable to the frozen runs it
+        # exists to be compared against.
+        recovery_rule = getattr(task, "recovery_rule_text", lambda: "")()
+        tail = (f"\n\n{recovery_rule}\n\n" if recovery_rule else " ")
         return (f"Tools available:\n{schema}\n\n"
                 f"Perform {task.depth} steps. At each step, choose the tool "
                 f"according to this rule, applied to the incoming ref value:\n"
                 f"{task.routing_rule_text()}\n\n"
-                f"The first step's ref={task.seed_value}. {ref_rule} "
+                f"The first step's ref={task.seed_value}. {ref_rule}{tail}"
                 f"Emit one JSON object per step: {{\"tool\": name, \"args\": {{\"ref\": value}}}}.")
     order = " -> ".join(s.tool for s in task.gold)
     return (f"Tools available:\n{schema}\n\n"
@@ -1069,19 +1084,16 @@ def run_recovery(task, backend: Backend, call_mode: str = "uniform",
     records: list[StepRecord] = []
     messages = [{"role": "system", "content": _SYSTEM},
                 {"role": "user", "content": _task_intro(task, schema_style)}]
-    rule = getattr(task, "recovery_rule_text", lambda: "")()
-    if rule:
-        messages.append({"role": "user", "content": rule})
-
     held = task.seed_value
     remaining = getattr(task, "resync_budget", 1)
     t = 0
     guard = 0
+    free_used_this_step = False
     # A resync does not advance the step, so the loop is bounded by calls rather than by
-    # steps. The guard is the budget: depth steps plus the resyncs allowed, plus slack for
-    # a refused resync being retried once. Without it a model that emits check_state
-    # forever would spin.
-    max_calls = task.depth + getattr(task, "resync_budget", 1) + 2
+    # steps: depth steps, plus one free no-op resync per step (see below), plus the
+    # charged repairs allowed, plus slack for a refused resync being retried once. Without
+    # it a model that emits check_state forever would spin.
+    max_calls = 2 * task.depth + getattr(task, "resync_budget", 1) + 2
 
     while t < task.depth and guard < max_calls:
         guard += 1
@@ -1109,8 +1121,28 @@ def run_recovery(task, backend: Backend, call_mode: str = "uniform",
 
             if call.parse_ok and call.tool == RESYNC_TOOL:
                 was_resync = True
-                if remaining > 0:
+                # A resync issued while the held value is ALREADY canonical repairs
+                # nothing: it returns the number the agent is holding. Charging the budget
+                # for it measured the model's prior about when to ask rather than its
+                # ability to recover, and in the pilot it consumed every repair at step 0,
+                # where divergence is impossible by construction. So a no-op resync is
+                # free -- but only once per step, otherwise a model that emits check_state
+                # unconditionally would never advance and never pay.
+                #
+                # This leaks nothing the agent can act on: the reply is "result: <value>"
+                # whether or not the budget moved, and the moment the agent is genuinely
+                # diverged the repair costs its one shot as before.
+                no_op = (held == gold_ref)
+                if no_op and not free_used_this_step:
+                    free_used_this_step = True
+                    charged, granted = False, True
+                elif remaining > 0:
                     remaining -= 1
+                    charged, granted = True, True
+                else:
+                    charged, granted = False, False
+
+                if granted:
                     held = gold_ref          # state repaired: back on the canonical value
                     messages.append({"role": "assistant",
                                      "content": json.dumps({"tool": RESYNC_TOOL,
@@ -1152,6 +1184,7 @@ def run_recovery(task, backend: Backend, call_mode: str = "uniform",
                 args_correct_given_state=False, correct_given_state=False,
                 held_ref=held_in, first_listed_even=_first_listed_even(task, t),
                 truncated=None, used_resync=True, resync_remaining=remaining,
+                resync_charged=charged,
                 diverged_in=diverged_in, gold_ref=gold_ref, held_out=held))
             continue        # same step, retried with repaired state
 
@@ -1171,6 +1204,7 @@ def run_recovery(task, backend: Backend, call_mode: str = "uniform",
             truncated=was_truncated, used_resync=False, resync_remaining=remaining,
             diverged_in=diverged_in, gold_ref=gold_ref, held_out=held))
         t += 1
+        free_used_this_step = False
 
     return records
 

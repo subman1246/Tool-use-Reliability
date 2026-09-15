@@ -96,6 +96,16 @@ def report(path, base_seed=1000):
             assert n <= d, ("%s recorded %d scored steps at depth %d -- more steps than "
                             "the task has, so the arms are mixed" % (t, n, d))
 
+        # The headline diagnostic for this arm. A resync issued while the held value is
+        # already canonical repairs nothing, and one issued with the budget gone is
+        # refused; only a CHARGED resync at a diverged step is the event the arm exists to
+        # observe. The first pilot logged 20 resyncs and zero of these.
+        granted_diverged = sum(1 for t in ids for r in by_task[t]
+                               if r.used_resync and r.resync_charged and r.diverged_in)
+        n_resync_calls = sum(1 for t in ids for r in by_task[t] if r.used_resync)
+        n_free = sum(1 for t in ids for r in by_task[t]
+                     if r.used_resync and r.resync_charged is False and not r.diverged_in)
+
         diverged = [o for o in outs if o["diverged"]]
         rows.append({
             "depth": d,
@@ -109,6 +119,14 @@ def report(path, base_seed=1000):
             "gold_corrupt": _rate(cs["corrupt_gold"], cs["corrupt_n"]),
             "n_clean_steps": cs["clean_n"],
             "n_corrupt_steps": cs["corrupt_n"],
+            "n_resync_calls": n_resync_calls,
+            "n_free_noop_resync": n_free,
+            "granted_while_diverged": granted_diverged,
+            "recovered_of_granted": sum(
+                1 for t in ids
+                if any(r.used_resync and r.resync_charged and r.diverged_in
+                       for r in by_task[t])
+                and recovery_outcome(tasks[t], by_task[t])["recovered"]),
         })
         rows[-1]["cond_severity"] = rows[-1]["cond_clean"] - rows[-1]["cond_corrupt"]
     return rows
@@ -124,15 +142,18 @@ def main():
     base_seed = int(sys.argv[2]) if len(sys.argv) > 2 else 1000
     rows = report(path, base_seed)
     print(path)
-    print("%-6s %6s %9s %8s %9s %10s %12s %9s %9s"
-          % ("depth", "tasks", "diverged", "resync", "RECOVERY", "cond|corr",
-             "cond_sever", "gold|corr", "n_corr"))
+    print("%-6s %6s %9s %7s %6s %9s %9s %10s %12s %9s %7s"
+          % ("depth", "tasks", "diverged", "resync", "free", "GRANTED|d",
+             "RECOVERY", "cond|corr", "cond_sever", "gold|corr", "n_corr"))
     for r in rows:
-        print("%-6d %6d %9d %8d %9s %10s %12s %9s %9d"
-              % (r["depth"], r["n_tasks"], r["n_diverged"], r["n_used_resync"],
+        print("%-6d %6d %9d %7d %6d %9d %9s %10s %12s %9s %7d"
+              % (r["depth"], r["n_tasks"], r["n_diverged"], r["n_resync_calls"],
+                 r["n_free_noop_resync"], r["granted_while_diverged"],
                  _fmt(r["recovery_rate"]), _fmt(r["cond_corrupt"]),
                  _fmt(r["cond_severity"]), _fmt(r["gold_corrupt"]),
                  r["n_corrupt_steps"]))
+    total = sum(r["granted_while_diverged"] for r in rows)
+    print("\ngranted-while-diverged (the event the arm exists to observe): %d" % total)
     Path("data/results").mkdir(parents=True, exist_ok=True)
     out = Path(path).with_name(Path(path).stem + "_recovery_report.json")
     out.write_text(json.dumps(rows, indent=2), encoding="utf-8")

@@ -161,8 +161,15 @@ def test_budget_is_enforced() -> None:
     assert task.resync_budget == 1
     assert all(r.resync_remaining >= 0 for r in recs if r.used_resync)
     assert len(granted) >= 1, "budget never reached zero"
-    # and the loop terminates rather than spinning forever
-    assert len(recs) <= task.depth + task.resync_budget + 2, len(recs)
+    # and the loop terminates rather than spinning forever. The bound grew when no-op
+    # resyncs stopped costing the budget: depth steps, one free no-op per step, the
+    # charged repairs, plus retry slack.
+    assert len(recs) <= 2 * task.depth + task.resync_budget + 2, len(recs)
+    # the free allowance must not have become a second repair
+    charged = [r for r in recs if r.used_resync and r.resync_charged]
+    assert len(charged) <= task.resync_budget, (
+        "%d resyncs consumed the budget under a spammer, budget is %d"
+        % (len(charged), task.resync_budget))
     print("  ok  one-shot budget enforced and the loop terminates under a resync spammer")
 
 
@@ -193,12 +200,92 @@ def test_three_way_split_disagrees_where_it_should() -> None:
           % (out["gold_agreement"], out["conditional"], out["recovered"]))
 
 
+def test_free_no_op_resync_opens_no_extra_information() -> None:
+    """Reflexive resyncing must buy nothing over asking once, at the moment it matters.
+
+    Not charging the budget for a resync issued while the held value is already canonical
+    fixed a real degeneracy -- the pilot model spent its single repair at step 0, where
+    there is nothing to repair -- but it introduces a way to cheat: if an agent can call
+    check_state before every step at no cost, it could use the free calls as a divergence
+    detector, or accumulate more than one genuine repair, and the free-running arm would
+    quietly become the teacher-forced arm.
+
+    So the adversarial policy is run directly: err once, then emit check_state at the top
+    of EVERY step. Its scored steps must come out identical, step for step, to the oracle
+    that resyncs exactly once at the moment it is actually off-canonical, and it must not
+    consume more than the budget in genuine repairs.
+    """
+    tasks = _tasks()
+    mismatched = []
+    for task in tasks:
+
+        def oracle(t, step, ref, attempt, _s={}):
+            if step == 1 and not _s.get("erred"):
+                _s["erred"] = True
+                bad = (ref + 1) % 100000
+                return _expected_tool_given_ref(t, step, bad), {"ref": bad}, True
+            if _s.get("erred") and not _s.get("repaired"):
+                _s["repaired"] = True
+                return RESYNC_TOOL, {}, True
+            return (_expected_tool_given_ref(t, step, ref),
+                    _expected_args_given_held(t, step, ref), True)
+
+        def reflexive(t, step, ref, attempt, _s={"seen": set()}):
+            # ask at the top of every step, whether or not anything is wrong
+            if step not in _s["seen"]:
+                _s["seen"].add(step)
+                return RESYNC_TOOL, {}, True
+            if step == 1 and not _s.get("erred"):
+                _s["erred"] = True
+                bad = (ref + 1) % 100000
+                return _expected_tool_given_ref(t, step, bad), {"ref": bad}, True
+            return (_expected_tool_given_ref(t, step, ref),
+                    _expected_args_given_held(t, step, ref), True)
+
+        a = run_recovery(task, MockBackend(oracle), "uniform",
+                         FeedbackMode.STRUCTURED, 1)
+        b = run_recovery(task, MockBackend(reflexive), "uniform",
+                         FeedbackMode.STRUCTURED, 1)
+
+        charged = [r for r in b if r.used_resync and r.resync_charged]
+        assert len(charged) <= task.resync_budget, (
+            "%s: reflexive resyncing consumed %d repairs, budget is %d -- the free "
+            "no-op allowance became a second repair"
+            % (task.task_id, len(charged), task.resync_budget))
+
+        sa = [r for r in a if not r.used_resync]
+        sb = [r for r in b if not r.used_resync]
+        if len(sa) != len(sb):
+            mismatched.append((task.task_id, "step count %d vs %d" % (len(sa), len(sb))))
+            continue
+        for x, y in zip(sa, sb):
+            key = lambda r: (r.step, r.tool, r.selection_matches_gold,
+                             r.args_correct_strict, r.held_ref, r.held_out,
+                             r.diverged_in)
+            if key(x) != key(y):
+                mismatched.append((task.task_id, "step %d: %r vs %r"
+                                   % (x.step, key(x), key(y))))
+
+        assert recovery_outcome(task, a)["recovered"] == \
+            recovery_outcome(task, b)["recovered"], (
+            "%s: the two policies disagree on whether the task was recovered"
+            % task.task_id)
+
+    assert not mismatched, (
+        "reflexive resyncing changed %d scored steps, so free no-op resyncs are an "
+        "information channel rather than a no-op: %s"
+        % (len(mismatched), mismatched[:3]))
+    print("  ok  free no-op resyncs buy nothing: reflexive == oracle on every scored "
+          "step (%d tasks)" % len(tasks))
+
+
 def main() -> None:
     test_never_repair_matches_free_running()
     test_always_repair_recovers_the_original_trajectory()
     test_resync_restores_the_canonical_value()
     test_budget_is_enforced()
     test_three_way_split_disagrees_where_it_should()
+    test_free_no_op_resync_opens_no_extra_information()
     print("\nrecovery mechanism repairs state, is inert unused, and the three-way "
           "split genuinely separates")
 
