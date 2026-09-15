@@ -23,7 +23,7 @@ import random
 import re
 import time
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Callable, Protocol
 
 from tur.eval.scoring import ParsedCall, ErrorType, score_step
@@ -1238,3 +1238,227 @@ def recovery_outcome(task, records: list[StepRecord]) -> dict:
         "conditional": sum(1 for r in steps if r.correct_given_state) / len(steps),
         "n_steps": len(steps), "n_resync": sum(1 for r in records if r.used_resync),
     }
+
+
+# --------------------------- repaired-trajectory arm ---------------------------
+#
+# WHY THIS REPLACED THE ELECTED-REPAIR ARM
+#
+# The recovery arm above offers check_state and lets the model decide when to use it. Two
+# pilots on allam-2-7b showed that the decision is not made on evidence: with the rule
+# stated as the last turn before step 0, the model spent its single repair immediately in
+# 14 of 16 tasks -- at the one step where the held value equals the canonical value by
+# construction, so every repair returned the number already in the prompt. With the same
+# rule stated inside the task description, it never called the tool at all, in 16 of 16.
+# Zero repairs landed on a diverged step either way. The model has no divergence signal in
+# this task, so its only coherent policies are "always ask" and "never ask", and prompt
+# salience picks between them. Raising the budget would just select "always ask", which
+# collapses the free-running arm into the teacher-forced one.
+#
+# So repair is assigned here rather than elected, the same way corruption is assigned in
+# the injection arm. That isolates the question Section 7 actually asks -- given a route
+# back, does the agent return to the goal, or does it merely continue competently from
+# where it stands -- from the question the elected arm kept answering instead, which is
+# whether the model knows to ask.
+#
+# WHY IT IS NOT APPENDIX E AGAIN
+#
+# Appendix E's corrected branch already establishes that handing back the true value
+# restores accuracy ON THE NEXT CALL (+0.000 against baseline at j=1,3,5). Re-measuring
+# one call would duplicate it. This arm therefore scores the trajectory to the END of the
+# task: after the repair the model runs free for the remaining steps, and the verdict is
+# whether it finishes holding the task's TRUE final output. Returning to the canonical
+# value for one call and drifting off again is not recovery, and only a downstream-to-
+# completion measure can tell the two apart. repair_at is constrained so at least two
+# steps remain to be scored, which is what makes the measure a trajectory property rather
+# than Appendix E with extra steps.
+#
+# CONSTRUCTION
+#
+# One shared, genuinely free prefix, then a fork that differs in exactly one value:
+#
+#   1. teacher-forced gold up to inject_at, with the step inject_at-1 result corrupted
+#   2. FREE running from inject_at to repair_at-1, run ONCE so both branches inherit the
+#      identical history, including whatever the model did wrong in it
+#   3. at repair_at both branches receive the same check_state exchange. The repaired
+#      branch is handed the canonical value; the unrepaired branch is handed the value it
+#      is already carrying, so its "repair" is a no-op by construction. The two message
+#      lists differ in exactly one number, same discipline as run_injection_pair.
+#   4. FREE running to the end of the task on each branch, scored to completion
+
+_REP_REPAIRED = "rep_repaired"
+_REP_UNREPAIRED = "rep_unrepaired"
+
+
+def _free_segment(task, backend, messages, held, start, stop, mode, call_mode,
+                  feedback, max_retries, pair_id, inject_at, corruption,
+                  records, gold_ref_of):
+    """Run steps [start, stop) free, appending one StepRecord each. Returns held value."""
+    for t in range(start, stop):
+        gold_ref = gold_ref_of(task, t)
+        held_in = held
+        attempts = 0
+        recovered_syn = False
+        final_score = None
+        executed = False
+        final_call = None
+        was_truncated = None
+        for attempt in range(max_retries + 1):
+            attempts += 1
+            ctx = {"task": task, "step": t, "ref": held, "attempt": attempt}
+            messages.append({"role": "user", "content": "[step " + str(t) + "]",
+                             "_ctx": ctx})
+            resp = backend.complete(messages, task.schema_view(), call_mode)
+            fr = resp.get("finish_reason") if isinstance(resp, dict) else None
+            was_truncated = (fr == "length") if fr is not None else None
+            call = parse_response(resp, call_mode)
+            final_call = call
+            ex = execute(task, call.tool or "", call.args or {}, feedback)
+            score = score_step(
+                call, task.gold[t], ex.schema_valid, ex.known_tool,
+                expected_tool=_expected_tool_given_ref(task, t, held),
+                expected_args=_expected_args_given_held(task, t, held))
+            final_score = score
+            if ex.ok:
+                executed = True
+                if attempt > 0 and score.correct:
+                    recovered_syn = True
+                messages.append({"role": "assistant",
+                                 "content": json.dumps({"tool": call.tool,
+                                                        "args": call.args})})
+                messages.append({"role": "user", "content": ex.feedback})
+                held = ex.output
+                break
+            messages.append({"role": "user", "content": ex.feedback})
+
+        if final_score is None:
+            break
+        records.append(StepRecord(
+            task.task_id, task.depth, t, mode, call_mode,
+            final_call.tool if final_call else None,
+            final_score.selection_correct, final_score.selection_matches_gold,
+            final_score.args_correct_strict, final_score.args_correct_soft,
+            final_score.error_type.value, attempts, executed,
+            context_clean_in=(held_in == gold_ref), recovered=recovered_syn,
+            stalled_in=False,
+            backend_error=bool(final_call and final_call.is_backend_error),
+            args_correct_given_state=final_score.args_correct_given_state,
+            correct_given_state=final_score.correct_given_state,
+            held_ref=held_in, first_listed_even=_first_listed_even(task, t),
+            truncated=was_truncated, diverged_in=(held_in != gold_ref),
+            gold_ref=gold_ref, held_out=held,
+            inject_at=inject_at, injection=corruption, pair_id=pair_id))
+    return held
+
+
+def run_repair_pair(task, backend: Backend, inject_at: int, repair_at: int,
+                    corruption: str = "parity_flip",
+                    call_mode: str = "uniform",
+                    feedback: FeedbackMode = FeedbackMode.STRUCTURED,
+                    max_retries: int = 1,
+                    schema_style: str = "verbose") -> list[StepRecord]:
+    """Corrupt at inject_at, run free, hand the state back at repair_at, finish free.
+
+    Returns the records of BOTH branches. Steps before repair_at appear once per branch
+    with identical content, because they were produced by a single shared run.
+    """
+    from tur.tasks.recovery import RESYNC_TOOL, canonical_ref_at
+
+    if not hasattr(task, "branches"):
+        raise ValueError("the repair arm requires a RoutingTask: on a linear task the "
+                         "tool order is announced in the prompt, so restoring a value "
+                         "cannot change which tool is correct and there is nothing for "
+                         "the repair to put back.")
+    if not 1 <= inject_at < task.depth:
+        raise ValueError("inject_at must satisfy 1 <= inject_at < depth (" +
+                         str(task.depth) + "); got " + str(inject_at) +
+                         ". Step 0 has no previous result to corrupt.")
+    if not inject_at < repair_at <= task.depth - 2:
+        # The upper bound is what stops this becoming Appendix E: at repair_at = depth-2
+        # exactly two steps remain, which is the minimum that makes the verdict a
+        # downstream trajectory property rather than a single corrected call.
+        raise ValueError(
+            "repair_at must satisfy inject_at < repair_at <= depth-2 (" +
+            str(task.depth - 2) + "); got " + str(repair_at) + ". A repair with fewer "
+            "than two steps left measures the next call, which Appendix E already "
+            "reports, rather than whether the trajectory returns to the goal.")
+    if corruption not in _INJECTIONS:
+        raise ValueError("unknown injection mode " + repr(corruption))
+
+    true_val = task.gold[inject_at - 1].output
+    import zlib
+    seed = zlib.crc32((task.task_id + "|" + str(inject_at) + "|" + corruption).encode())
+    bad_val = _corrupt_value(true_val, corruption, seed)
+    pair_id = (task.task_id + "|j" + str(inject_at) + "|r" + str(repair_at) + "|"
+               + corruption)
+
+    # ---- shared prefix: teacher-forced to inject_at with one corrupted result ----
+    messages = [{"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": _task_intro(task, schema_style)}]
+    for j in range(inject_at):
+        messages.append({"role": "user", "content": "[step " + str(j) + "]"})
+        messages.append({"role": "assistant",
+                         "content": json.dumps({"tool": task.gold[j].tool,
+                                                "args": task.gold[j].args})})
+        shown = bad_val if j == inject_at - 1 else task.gold[j].output
+        messages.append({"role": "user", "content": "result: " + str(shown)})
+
+    # ---- shared free segment, run ONCE so both branches inherit the same history ----
+    shared: list[StepRecord] = []
+    held = _free_segment(task, backend, messages, bad_val, inject_at, repair_at,
+                         "rep_shared", call_mode, feedback, max_retries, pair_id,
+                         inject_at, corruption, shared, canonical_ref_at)
+
+    records: list[StepRecord] = []
+    for mode, handed in ((_REP_REPAIRED, canonical_ref_at(task, repair_at)),
+                         (_REP_UNREPAIRED, held)):
+        # The branches differ in exactly this number. The unrepaired branch pays the same
+        # call and sees the same shape, so the contrast is the value, not the exchange.
+        branch = [dict(m) for m in messages]
+        branch.append({"role": "assistant",
+                       "content": json.dumps({"tool": RESYNC_TOOL, "args": {}})})
+        branch.append({"role": "user", "content": "result: " + str(handed)})
+
+        for r in shared:
+            records.append(replace(r, run_mode=mode))
+        _free_segment(task, backend, branch, handed, repair_at, task.depth,
+                      mode, call_mode, feedback, max_retries, pair_id,
+                      inject_at, corruption, records, canonical_ref_at)
+    return records
+
+
+def repair_outcome(task, records: list[StepRecord], inject_at: int,
+                   repair_at: int) -> dict:
+    """Did the repair return the trajectory to the ORIGINAL goal, all the way to the end?
+
+    `completed_original` is the load-bearing measure and deliberately strict: the branch
+    finished every step AND finished holding the task's true final output. A branch that
+    took the handed value, made one correct call and then drifted is NOT recovered, which
+    is precisely the distinction a next-call-only check cannot draw.
+    """
+    out = {}
+    for mode in (_REP_REPAIRED, _REP_UNREPAIRED):
+        rs = sorted((r for r in records if r.run_mode == mode), key=lambda r: r.step)
+        if not rs:
+            continue
+        # only the steps from the repair onward are attributable to the repair
+        post = [r for r in rs if r.step >= repair_at]
+        # Steps before inject_at are teacher-forced into the prefix and never scored, so
+        # a branch that ran to the end holds depth - inject_at records, not depth.
+        completed = (len(rs) == task.depth - inject_at
+                     and rs[-1].step == task.depth - 1)
+        final_held = rs[-1].held_out
+        out[mode] = {
+            "completed": completed,
+            "completed_original": bool(completed and final_held == task.gold[-1].output),
+            "returned_to_gold_steps": sum(1 for r in rs if not r.diverged_in),
+            "downstream_gold_agreement": _rate_of(
+                post, lambda r: r.selection_matches_gold and r.args_correct_strict),
+            "downstream_conditional": _rate_of(post, lambda r: r.correct_given_state),
+            "n_downstream": len(post),
+        }
+    return out
+
+
+def _rate_of(rs, pred):
+    return float("nan") if not rs else sum(1 for r in rs if pred(r)) / len(rs)

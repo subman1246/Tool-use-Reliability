@@ -1,0 +1,73 @@
+# PHASE 1 (redesigned): assigned-repair arm.
+#
+#   py scripts/estimate_cost.py --config config/repair.yaml --days 3
+#   py scripts/run_real_suite.py --config config/repair.yaml --tag repair
+#
+# WHAT THIS REPLACES
+#
+# The elected-repair arm (config/recovery.yaml) offered check_state and let the model
+# decide when to use it. Two 16-task pilots on allam-2-7b showed the decision was made on
+# prompt salience, not on state: with the rule stated as the last turn before step 0 the
+# model spent its single repair immediately in 14 of 16 tasks -- at the one step where the
+# held value equals the canonical value by construction -- and with the same rule stated
+# inside the task description it never called the tool at all, in 16 of 16. Zero repairs
+# landed on a diverged step under either prompt. See docs/FINDING_elected_repair.md.
+#
+# Repair is therefore assigned here, the way corruption is assigned in the injection arm,
+# which isolates "given a route back, does the agent return to the goal" from "does the
+# model know to ask".
+#
+# WHY IT IS NOT APPENDIX E AGAIN
+#
+# Appendix E's corrected branch already shows that handing back the true value restores
+# the NEXT call (+0.000 against baseline at j=1,3,5). This arm scores to the END of the
+# task instead: after the repair the model runs free for the remaining steps and the
+# verdict is whether it finishes holding the task's true final output. repair_at is
+# constrained to leave at least two scored steps, which is what makes the measure a
+# trajectory property rather than a single corrected call. The constraint is enforced in
+# run_repair_pair and covered by tests/test_repair_arm.py.
+#
+# POSITIONS
+#
+# Only depth 6 and 8 carry enough room for a corrupt-drift-repair-finish trajectory:
+# repair_at <= depth-2 and inject_at < repair_at means depth 4 admits only (1,2), which
+# leaves a two-step downstream and a one-step drift. Depths 6 and 8 are also where the
+# paper's propagation signal lives.
+task_variant: repair
+arg_shift: 0
+
+depths: [6, 8]
+per_depth: {6: 40, 8: 40}
+
+# ONE position, deliberately. Appendix E already reports how severity varies with
+# position; this arm's question is binary -- does the handed-back value return the
+# trajectory to the goal -- so budget buys a tighter interval on that rate rather than a
+# position profile. inject_at=1 corrupts as early as the task allows and repair_at=3
+# leaves the longest downstream the depth-6 guard permits (r <= depth-2): 3 scored steps
+# at depth 6, 5 at depth 8.
+inject_at: [1]
+repair_at: [3]
+# parity_flip only: Appendix E found the argument channel produced no degradation
+# (-0.032, zero pairs favouring the corrected branch), so a parity_preserving repair
+# would be restoring a value that was not costing the model anything.
+injections: ["parity_flip"]
+
+control_arm: null
+budget_days: 3
+
+distractor_level: 1
+seeds: 1
+feedback: structured
+call_mode: uniform
+max_retries: 1
+
+# Single model, reported as such. Of the five models in the paper, three are retired from
+# Groq (llama-3.1-8b-instant, llama-3.3-70b-versatile, qwen/qwen3.6-27b) and gpt-oss-120b
+# sits at ceiling (L_6 = 0.030), so it barely diverges and would contribute almost no
+# repair opportunities.
+models:
+  - {name: "groq/allam-2-7b", family: "allam", scale: 7, provider: "groq", rpd: 7000, tpm: 6000, tpd: 500000}
+
+paths:
+  results: data/results
+  cache: data/cache

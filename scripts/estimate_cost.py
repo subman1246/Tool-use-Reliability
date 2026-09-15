@@ -89,7 +89,8 @@ def _tokenizer():
 
 
 def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
-                variant="routing", inject_at=None, injections=None):
+                variant="routing", inject_at=None, injections=None,
+                repair_at=None):
     """Exact call counts and measured prompt-token totals for one model.
 
     Drives the REAL run loops against a mock backend and counts tokens on the
@@ -103,7 +104,7 @@ def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
     sweep with the linear generator understated the token bill.
     """
     ntok, tok_name = _tokenizer()
-    gen = (generate_routing_suite if variant in ("routing", "injection", "recovery")
+    gen = (generate_routing_suite if variant in ("routing", "injection", "recovery", "repair")
            else generate_suite)
     suite = gen(depths, per_depth, distractor_level)
 
@@ -139,6 +140,44 @@ def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
                 for mode in (injections or []):
                     run_injection_pair(task, backend, j, mode, "uniform",
                                        FeedbackMode.STRUCTURED, max_retries)
+            calls_min += counted["calls"]
+            prompt_tokens += counted["tokens"]
+        return {
+            "tasks": len(suite),
+            "tokenizer": tok_name,
+            "calls_min": calls_min * seeds,
+            "calls_worst": calls_min * (max_retries + 1) * seeds,
+            "prompt_tokens": prompt_tokens * seeds,
+            "output_tokens": calls_min * seeds * _OUTPUT_TOKENS_PER_CALL,
+        }
+
+    if variant == "repair":
+        # Both branches are costed. The shared pre-repair segment is run ONCE and
+        # inherited, so it is charged once, not twice -- costing it per branch would
+        # overstate the arm by roughly the prefix length.
+        from tur.harness.runner import run_repair_pair
+        for task in suite:
+            counted = {"calls": 0, "tokens": 0}
+            # Counted with the conditional-perfect policy for the same reason the
+            # injection arm is: tokens do not depend on whether a call is right, but a
+            # policy that errs trips retries and inflates the count.
+            backend = MockBackend(perfect_conditional)
+            inner = backend.complete
+
+            def complete(messages, tools, mode, _c=counted, _inner=inner):
+                text = "".join(str(m.get("content", "")) for m in messages)
+                _c["tokens"] += ntok(text)
+                _c["calls"] += 1
+                return _inner(messages, tools, mode)
+
+            backend.complete = complete
+            for j in (inject_at or []):
+                for r in (repair_at or []):
+                    if not (1 <= j < r <= task.depth - 2):
+                        continue
+                    for mode in (injections or []):
+                        run_repair_pair(task, backend, j, r, mode, "uniform",
+                                        FeedbackMode.STRUCTURED, max_retries)
             calls_min += counted["calls"]
             prompt_tokens += counted["tokens"]
         return {
@@ -212,9 +251,9 @@ def count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
 
 def estimate(depths, per_depth, seeds, max_retries, models, distractor_level=1,
              days=3, headroom=0.80, variant="routing", control=None,
-             inject_at=None, injections=None):
+             inject_at=None, injections=None, repair_at=None):
     s = count_sweep(depths, per_depth, seeds, max_retries, distractor_level,
-                    variant, inject_at, injections)
+                    variant, inject_at, injections, repair_at)
     if control:
         # The control arm is part of the bill, so it is part of the estimate.
         # Reporting only the primary arm would understate the sweep by exactly
@@ -379,6 +418,7 @@ def main():
              days=args.days, headroom=args.headroom,
              variant=cfg.get("task_variant", "routing"), control=ctrl,
              inject_at=[int(x) for x in (cfg.get("inject_at") or [])],
+             repair_at=[int(x) for x in (cfg.get("repair_at") or [])],
              injections=list(cfg.get("injections") or []))
 
 

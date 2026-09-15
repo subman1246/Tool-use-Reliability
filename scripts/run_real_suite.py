@@ -41,6 +41,7 @@ from tur.harness.cache import Cache
 from tur.harness.executor import FeedbackMode
 from tur.harness.runner import (run_free, run_teacher_forced, LiteLLMBackend,
                                 run_injection_pair, run_recovery,
+                                run_repair_pair,
                                 RateLimiter, DailyCapReached)
 from tur.analysis.aggregate import (load_records, aggregate_by_depth,
                                     stats_to_arrays, bootstrap_L_ci,
@@ -95,7 +96,7 @@ def _suite_for(variant: str, depths, per_depth, distractor_level: int, seed: int
     # the same generator as the routing arm. Recovery additionally wraps each task so
     # the repair tool appears in the schema, done below rather than here so the plain
     # suite stays the single source of task identity.
-    if variant in ("routing", "injection", "recovery"):
+    if variant in ("routing", "injection", "recovery", "repair"):
         return generate_routing_suite(depths, per_depth, distractor_level,
                                       base_seed=seed * 31 + 1000,
                                       arg_shift=arg_shift,
@@ -258,7 +259,8 @@ def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
              lines: list[str] | None = None, deadline: float | None = None,
              arg_shift: int = 0, shuffle_branch_order: bool = False,
              inject_at: list[int] | None = None,
-             injections: list[str] | None = None
+             injections: list[str] | None = None,
+             repair_at: list[int] | None = None
              ) -> tuple[list[dict], dict, bool]:
     """Run one model's full sweep on one task variant.
 
@@ -313,6 +315,23 @@ def run_model(model_cfg: dict, depths: list[int], per_depth, seeds: int,
                             pairs += run_injection_pair(
                                 task, backend, j, mode, call_mode, feedback,
                                 max_retries)
+                    f, t = pairs, []
+                elif variant == "repair":
+                    # Assigned repair: corrupt at j, run free, hand the canonical value
+                    # back at r, then run free to the END of the task. Positions whose
+                    # (j, r) does not leave two scored steps after the repair are skipped
+                    # rather than clamped -- with fewer than two the verdict collapses
+                    # onto the repaired call itself, which is Appendix E's corrected
+                    # branch and already reported.
+                    pairs = []
+                    for j in (inject_at or []):
+                        for r in (repair_at or []):
+                            if not (1 <= j < r <= task.depth - 2):
+                                continue
+                            for mode in (injections or []):
+                                pairs += run_repair_pair(
+                                    task, backend, j, r, mode, call_mode, feedback,
+                                    max_retries)
                     f, t = pairs, []
                 elif variant == "recovery":
                     # to_recovery_task copies the gold trajectory rather than
@@ -414,6 +433,11 @@ def main():
     arg_shift = int(cfg.get("arg_shift", 0) or 0)
     inject_at = [int(x) for x in (cfg.get("inject_at") or [])]
     injections = list(cfg.get("injections") or [])
+    repair_at = list(cfg.get("repair_at") or [])
+    if variant == "repair" and not (inject_at and repair_at and injections):
+        raise SystemExit("task_variant: repair requires non-empty 'inject_at', "
+                         "'repair_at' and 'injections' in the config; refusing to run "
+                         "a sweep that would silently score nothing.")
     if variant == "injection" and not (inject_at and injections):
         raise SystemExit("task_variant: injection requires non-empty 'inject_at' "
                          "and 'injections' in the config; refusing to run a sweep "
@@ -541,7 +565,7 @@ def main():
             variant=variant, tpd=my_tpd, lines=lines,
             deadline=deadline, arg_shift=arg_shift,
             shuffle_branch_order=shuffle_order,
-            inject_at=inject_at, injections=injections)
+            inject_at=inject_at, injections=injections, repair_at=repair_at)
         out = {"model": m, "records": recs, "stats": stats, "capped": capped,
                "lines": lines, "control": None, "plan": plan,
                "primary_alloc": my_primary, "control_alloc": my_control}
@@ -842,6 +866,7 @@ def main():
                   "priors_used": {"r_syn": prior_rs, "r_sem": prior_rm},
                   "task_variant": variant, "arg_shift": arg_shift,
                   "inject_at": inject_at, "injections": injections,
+                  "repair_at": repair_at,
                   "shuffle_branch_order": shuffle_order,
                   "control_arm": control,
                   "structural_anomalies": anomalies,
