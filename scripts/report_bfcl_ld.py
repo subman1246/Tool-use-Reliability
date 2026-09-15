@@ -110,10 +110,20 @@ def main():
     for field, label in (("args_correct_strict", "gold agreement (tool+args)"),
                          ("selection_matches_gold", "selection only")):
         a = analyse(tasks, field, rng)
+        # The suppression rule, enforced here rather than left to whoever reads the
+        # output: below P_MIN the ratio's denominator is too small for the point estimate
+        # to mean anything, and a number printed with a caveat attached still gets quoted
+        # without the caveat. So p_d and g_d are reported and L_d is WITHHELD.
+        a["L_suppressed"] = a["p"] < P_MIN
         out[field] = a
-        print("%-28s p_d=%.3f [%.3f, %.3f]  g_d=%.3f  L_d=%.3f [%.3f, %.3f]  (%d calls/arm)"
-              % (label, a["p"], a["p_lo"], a["p_hi"], a["g"], a["L"], a["lo"], a["hi"],
-                 a["n_calls_per_arm"]))
+        if a["L_suppressed"]:
+            print("%-28s p_d=%.3f [%.3f, %.3f]  g_d=%.3f  L_d=WITHHELD  (%d calls/arm)"
+                  % (label, a["p"], a["p_lo"], a["p_hi"], a["g"], a["n_calls_per_arm"]))
+        else:
+            print("%-28s p_d=%.3f [%.3f, %.3f]  g_d=%.3f  L_d=%.3f [%.3f, %.3f]  "
+                  "(%d calls/arm)"
+                  % (label, a["p"], a["p_lo"], a["p_hi"], a["g"], a["L"], a["lo"],
+                     a["hi"], a["n_calls_per_arm"]))
 
     strict = out["args_correct_strict"]
     print()
@@ -125,11 +135,14 @@ def main():
               "give a meaningful interval -- at this n the bounds describe the resampling, "
               "not the uncertainty. Treat the point estimates as a smoke check only."
               % len(tasks))
-    if strict["p"] < P_MIN:
-        print("WARNING: p_d = %.3f is below %.2f. L_d is a ratio with that as its "
-              "denominator, so the interval [%.3f, %.3f] is wide for a structural reason "
-              "and the point estimate should not be compared against the synthetic arm's "
-              "L_d at this n." % (strict["p"], P_MIN, strict["lo"], strict["hi"]))
+    if strict["L_suppressed"]:
+        print("L_d WITHHELD: p_d = %.3f is below %.2f. The propagation loss is a ratio "
+              "with baseline competence as its denominator; at this p_d the point "
+              "estimate is not supported and is deliberately not reported, rather than "
+              "reported with a caveat. What the data supports at this n is p_d = %.3f "
+              "[%.3f, %.3f] and g_d = %.3f."
+              % (strict["p"], P_MIN, strict["p"], strict["p_lo"], strict["p_hi"],
+                 strict["g"]))
     else:
         print("p_d = %.3f supports the ratio; L_d = %.3f [%.3f, %.3f]"
               % (strict["p"], strict["L"], strict["lo"], strict["hi"]))
@@ -142,8 +155,15 @@ def main():
     print("free-arm unexecuted calls: %d"
           % sum(1 for d in tasks.values() for r in d[FREE] if not r["executed"]))
 
+    saved = {}
+    for k, v in out.items():
+        v = dict(v)
+        if v.get("L_suppressed"):
+            for drop in ("L", "lo", "hi"):
+                v[drop] = None
+        saved[k] = v
     p = Path(args.path)
-    p.with_name(p.stem + "_ld_report.json").write_text(json.dumps(out, indent=2),
+    p.with_name(p.stem + "_ld_report.json").write_text(json.dumps(saved, indent=2),
                                                        encoding="utf-8")
     print("\nwrote", p.with_name(p.stem + "_ld_report.json"))
 
