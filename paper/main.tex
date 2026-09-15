@@ -295,7 +295,7 @@ This establishes that the estimation and aggregation pipeline recovers configure
 
 This study uses synthetic integer-argument tasks, giving exact state transitions at the cost of ecological validity. The strongest empirical findings are carried by two 7--8B models; three stronger models are largely at ceiling. The unreachable-target proposition is general only through its explicit $\epsilon_k$ condition, while the empirical claim that our generator makes $\epsilon_k$ negligible depends on its hidden-state construction. Validation on natural-language arguments and stateful environments such as ToolSandbox or AppWorld is required before claiming prevalence in deployed agents.
 
-Three designed conditions were not executed: transformed arguments, randomized presentation order, and a calling-mode ablation. A linear-task control was executed on \texttt{allam-2-7b} alone: at depth 6, $L_6=0.156$ $[0.089,0.229]$ against $0.684$ $[0.624,0.745]$ on routing. The linear variant removes selection dependency but retains value copying; the residual loss is substantially smaller than routing's but excludes zero at depths 4 and 6, indicating that the baseline/free-running contrast captures effects beyond selection-error propagation alone. These are material threats, not cosmetic extensions. In particular, \texttt{allam-2-7b}'s anti-correlation may depend on the parity/order presentation, and copy arguments do not test semantic argument construction. Three of the five original models (\texttt{llama-3.1-8b-instant}, \texttt{llama-3.3-70b-versatile}, \texttt{qwen3.6-27b}) were retired from the hosting provider during this study, preventing new ablation conditions from being compared against their primary-arm baselines. Counting the earlier undocumented TPD caps (Section~\ref{sec:data}), this is the fourth distinct instance of unannounced infrastructure instability encountered in this study. A local-quantized replication of \texttt{llama-3.1-8b} was accordingly tested for equivalence against its frozen provider-hosted arm on matched tasks, under a rule fixed before those data existed: agreement within $0.05$ and an 89\% paired interval containing zero, at every shared depth and in both run modes. It failed in five of ten cells (depths 6 and 8 under teacher forcing; depths 4, 6 and 8 free-running), and the local arm exceeded the frozen arm in all ten cells with the gap widening in depth, indicating a systematic offset rather than sampling variation; pooling the two would have moved $L_6$ from $0.687$ to $0.518$. They are therefore reported as separate conditions and never compared cell-for-cell. The cause cannot be isolated, because that retirement preceded the comparison: quantization and the provider's serving stack are confounded, and no further probe of the frozen arm is possible. The unequal nested sample sizes preclude scale or family comparisons. The reported intervals require the task-level artifact for reproduction; call-level binomial intervals would be invalid because steps within a task are dependent.
+Three designed conditions were not executed: transformed arguments, randomized presentation order, and a calling-mode ablation. A linear-task control was executed on \texttt{allam-2-7b} alone: at depth 6, $L_6=0.156$ $[0.089,0.229]$ against $0.684$ $[0.624,0.745]$ on routing. The linear variant removes selection dependency but retains value copying; the residual loss is substantially smaller than routing's but excludes zero at depths 4 and 6, indicating that the baseline/free-running contrast captures effects beyond selection-error propagation alone. A recovery-enabled variant that restores the canonical state at a fixed step was also run on \texttt{allam-2-7b} alone (Appendix~\ref{app:repair}): at depth 6 the restoration raised downstream gold agreement by $+0.126$ $[+0.063,+0.198]$ but raised completion of the original task by only $+0.054$ $[+0.000,+0.108]$, an interval including zero and resting on two events, so returning to the canonical trajectory and recovering the original goal are dissociated on this measure even though only the first difference is supported at this sample size. These are material threats, not cosmetic extensions. In particular, \texttt{allam-2-7b}'s anti-correlation may depend on the parity/order presentation, and copy arguments do not test semantic argument construction. Three of the five original models (\texttt{llama-3.1-8b-instant}, \texttt{llama-3.3-70b-versatile}, \texttt{qwen3.6-27b}) were retired from the hosting provider during this study, preventing new ablation conditions from being compared against their primary-arm baselines. Counting the earlier undocumented TPD caps (Section~\ref{sec:data}), this is the fourth distinct instance of unannounced infrastructure instability encountered in this study. A local-quantized replication of \texttt{llama-3.1-8b} was accordingly tested for equivalence against its frozen provider-hosted arm on matched tasks, under a rule fixed before those data existed: agreement within $0.05$ and an 89\% paired interval containing zero, at every shared depth and in both run modes. It failed in five of ten cells (depths 6 and 8 under teacher forcing; depths 4, 6 and 8 free-running), and the local arm exceeded the frozen arm in all ten cells with the gap widening in depth, indicating a systematic offset rather than sampling variation; pooling the two would have moved $L_6$ from $0.687$ to $0.518$. They are therefore reported as separate conditions and never compared cell-for-cell. The cause cannot be isolated, because that retirement preceded the comparison: quantization and the provider's serving stack are confounded, and no further probe of the frozen arm is possible. The unequal nested sample sizes preclude scale or family comparisons. The reported intervals require the task-level artifact for reproduction; call-level binomial intervals would be invalid because steps within a task are dependent.
 
 % =====================================================================
 \section{Conclusion}
@@ -640,5 +640,100 @@ the effect, so the ablation establishes the direction of the observational bias 
 firmly than it establishes the magnitude of the causal severity. The eight tasks not
 collected would not change that. We report it as a single-model causal check on the
 estimand, not as suite-wide validation.
+
+\section{Recovery-enabled task variant}
+\label{app:repair}
+
+Section~\ref{sec:central-result} shows that after a divergence the canonical target is
+unreachable, so gold agreement cannot express recovery; Section~\ref{sec:remedy} scores
+calls conditional on the state actually held instead. Neither distinguishes an agent that
+continues competently from a wrong state from one that returns to the right one, because
+the routing task offers no route back. This variant adds one.
+
+\paragraph{Mechanism.} A single additional tool, \texttt{check\_state}, returns the
+canonical reference value for the step the agent is on. It consumes a call, does not
+advance the task, and is usable once per task. The one-shot budget makes usage binary, and
+excludes the degenerate policy of resynchronising before every step, which would convert
+the free-running arm into the teacher-forced arm. After a successful repair the agent again
+holds the canonical value and can rejoin the gold trajectory, which is what makes genuine
+recovery possible rather than merely tidy continuation.
+
+\paragraph{Elected repair measures prompt position, not state.} Two pilots on
+\texttt{allam-2-7b} (16 tasks each, 8 at depth 4 and 8 at depth 6, identical seeds and gold
+trajectories) offered the tool and let the model choose when to use it. With the budget
+rule stated as the final instruction before the first step, the model called
+\texttt{check\_state} in 14 of 16 tasks and in every case at step 0, where the held value
+equals the canonical value by construction, so each call returned the number already in the
+prompt. With the same rule stated inside the task description and the output format stated
+last, it called the tool in 0 of 16. No repair landed on a diverged step under either
+prompt. The mechanism was not at fault: an always-repair oracle recovers the original
+trajectory in 100\% of tasks, and a never-repair policy is step-for-step identical to the
+free-running arm. The task supplies no divergence signal, so an agent's only coherent
+policies are to ask always or never, and prompt salience selects between them. Raising the
+budget would select the former and measure nothing. We therefore assign the repair rather
+than eliciting it.
+
+\paragraph{Construction.} As in Appendix~\ref{app:injection}, a value is corrupted at a
+fixed position ($j=1$, \texttt{parity\_flip}). The model then runs free, so the trajectory
+diverges under its own behaviour. At a fixed later position ($r=3$) both branches receive
+the same \texttt{check\_state} exchange: the repaired branch is handed the canonical value,
+the unrepaired branch the value it is already carrying, so its repair is a no-op by
+construction and the two message histories differ in exactly one number. The segment before
+the fork is executed once and inherited by both branches, so the pair is identical by
+construction rather than by reproducibility. Both branches then run free to the end of the
+task.
+
+\paragraph{Scoring is at completion, not at the repaired call.} Appendix~\ref{app:injection}
+already establishes that restoring the true value repairs the \emph{next} call ($+0.000$
+against baseline at $j=1,3,5$); re-measuring that would report a known result. The verdict
+here is \texttt{completed\_original}: the branch ran every remaining step \emph{and}
+finished holding the task's true final output. The constraint $r \le d-2$ is enforced in the
+harness so that at least two steps remain to be scored, which is what makes the verdict a
+trajectory property. A validity test fixes the distinction: a policy that makes the
+repaired call correctly and then drifts is scored as not recovered, where a
+next-call-only check would score it a success.
+
+\begin{table}[h]
+\centering
+\caption{Assigned repair at depth 6 on \texttt{allam-2-7b}, $n=37$ pairs. Intervals are
+89\% paired bootstrap intervals resampling pairs; the two branches share an inherited
+prefix, so the pair is the independent unit. Downstream rates cover the steps from the
+repair onward. Discordant counts are pairs in which exactly one branch was correct: $b$
+favours the repaired branch, $c$ the unrepaired one.}
+\label{tab:repair}
+\footnotesize
+\begin{tabular}{@{}lrrlr@{}}
+\toprule
+measure & repaired & unrepaired & difference [89\% interval] & $b/c$ \\
+\midrule
+\texttt{completed\_original} & 0.054 & 0.000 & $+0.054$ $[+0.000,+0.108]$ & 2/0 \\
+downstream gold agreement & 0.126 & 0.000 & \textbf{$+0.126$} $[+0.063,+0.198]$ & 9/0 \\
+downstream conditional-on-state & 0.342 & 0.297 & $+0.045$ $[-0.018,+0.108]$ & 6/3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Result.} Restoring the canonical state raises downstream gold agreement by
+$+0.126$ $[+0.063,+0.198]$, an interval excluding zero: the repair demonstrably returns the
+model to the canonical path. It does not measurably raise completion of the original task.
+That difference is $+0.054$ $[+0.000,+0.108]$, rests on two events in 37 pairs, and its
+interval includes zero, so we do not report it as an effect. Conditional-on-state
+competence is unchanged by the repair ($+0.045$ $[-0.018,+0.108]$), as expected: the model
+continues about as competently from a repaired state as from a corrupted one. The
+dissociation is the result. Returning to the canonical state and recovering the original
+goal are separable properties, and only the first is purchasable by handing the state back.
+We state the asymmetry carefully: the evidence for the first is statistically supported at
+this $n$, the absence of the second is not, and a larger sample could move completion off
+the floor without disturbing the ordering.
+
+The unrepaired branch completes the original task in 0 of 37 pairs, so the contrast is
+attributable to the repair rather than to a corrupted trajectory rejoining gold by
+coincidence. An oracle applying the routing rule to whatever value it holds completes 12 of
+12 repaired branches and 0 of 12 unrepaired ones, so the measure is not penalising correct
+behaviour.
+
+These results are from a single model at one depth. As with
+Appendix~\ref{app:injection}, we report them as a single-model check on whether the
+distinction is measurable at all, not as suite-wide validation of its magnitude.
 
 \end{document}
