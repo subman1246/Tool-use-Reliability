@@ -41,11 +41,16 @@ that was run once and inherited, so the pair is the independent unit.
 
 **Depth-6 result, already in hand:**
 
-| measure | repaired | unrepaired | delta | 89% interval |
-|---|---|---|---|---|
-| completed_original | 0.054 | 0.000 | +0.054 | [+0.000, +0.108] |
-| downstream gold agreement | 0.109 | 0.000 | +0.109 | [+0.054, +0.171] |
-| downstream conditional | 0.322 | 0.293 | +0.029 | [−0.025, +0.084] |
+Depth-6 ONLY (n=37). These are the figures in Appendix F. An earlier report of this arm
+pooled depths 6 and 8 and gave 0.109 / 0.322 / 0.293 for the three measures; those are
+**not** the depth-6 numbers and must not be quoted as such. `report_repair.py` prints the
+pooled row first, so re-filter to depth 6 before copying anything into the paper.
+
+| measure | repaired | unrepaired | delta | 89% interval | b/c |
+|---|---|---|---|---|---|
+| completed_original | 0.054 | 0.000 | +0.054 | [+0.000, +0.108] | 2/0 |
+| downstream gold agreement | 0.126 | 0.000 | +0.126 | [+0.063, +0.198] | 9/0 |
+| downstream conditional | 0.342 | 0.297 | +0.045 | [−0.018, +0.108] | 6/3 |
 
 Read together: the repair restores per-call agreement with gold (interval excludes zero)
 but does not restore completion of the original task (2 events in 37, lower bound at
@@ -157,7 +162,8 @@ pilot both report.
 
 ## Paper follow-ups
 
-`docs/PAPER_FLAGS.md` — logged, deliberately not drafted: the BFCL Related Work
-misclassification (with `method_invoke_order_checker` commented out at the call site as the
-citable basis), the equivalence-gate failure and its magnitude, and a pointer to
-`docs/FINDING_elected_repair.md`.
+`docs/PAPER_FLAGS.md` — items 1 (BFCL Related Work misclassification) and 2
+(equivalence-gate failure) are **APPLIED** in commit `4b9a7fe` and compile clean. Item 3
+(elected repair chosen by prompt position) is **APPLIED** as a paragraph of Appendix F in
+commit `5270341`. The flags file is now a provenance record of what was written and why —
+do not re-draft from it.

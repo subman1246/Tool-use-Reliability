@@ -6,8 +6,8 @@ drafting before the shaping evidence arrives tends to freeze a claim prematurely
 
 **Status: items 1 and 2 are APPLIED** in commit `4b9a7fe` and compile clean (0 errors, 0
 overfull boxes, 14 pages, 9-page main-content boundary held). They are kept here as the
-provenance record for what was written and why — do not re-draft them. Item 3 remains
-outstanding, pending the repair arm's full result.
+provenance record for what was written and why — do not re-draft them. Item 3 is APPLIED
+too, as a marked paragraph of Appendix F in commit `5270341`.
 
 ---
 
@@ -94,7 +94,7 @@ reconstruct the number.
 
 ---
 
-## 3. Elected repair is chosen by prompt position, not by state — OUTSTANDING
+## 3. Elected repair is chosen by prompt position, not by state — APPLIED `5270341`
 
 Already written up in full at `docs/FINDING_elected_repair.md`. Flagged here so the paper
 pass does not miss it: 14/16 tasks called the repair tool when the rule was stated last
@@ -102,3 +102,7 @@ before step 0, 0/16 when the same rule sat inside the task description, with tas
 gold trajectories and model held fixed. Zero repairs landed on a diverged step under either
 prompt. Belongs in the recovery-arm write-up regardless of what the assigned-repair arm
 returns.
+
+**As shipped:** written into Appendix F as the paragraph *"Elected repair measures prompt
+position, not state"*, carrying the 14/16 and 0/16 counts, the step-0 detail, and the
+oracle/never-repair controls that rule out the mechanism being at fault.
