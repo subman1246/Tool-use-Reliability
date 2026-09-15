@@ -26,7 +26,18 @@ py scripts/report_repair.py data/results/repair_groq_allam-2-7b.jsonl
 pairs. Paired is structural, not stylistic: the two branches share a pre-repair segment
 that was run once and inherited, so the pair is the independent unit.
 
-**State at last check:** depth 6 complete at n=37, depth 8 at 6/37, ~18–22h remaining.
+**State at last check:** depth 6 complete at n=37 and **written up as Appendix F**
+(commit `5270341`); depth 8 in progress, ~17h remaining.
+
+**Decision rule when depth 8 lands — do not improvise this:**
+
+- Add the depth-8 row to Appendix F's table.
+- If `completed_original`'s interval **still includes zero**: keep the agreed framing —
+  a null on the headline measure, a positive on downstream gold agreement, and *not*
+  written up as a positive result overall. No check-in needed; this is the expected path.
+- If `completed_original`'s interval **excludes zero at depth 8**: STOP. That strengthens
+  the finding from a dissociation-with-one-supported-half into a positive result, and the
+  wording must not be silently upgraded. Report it and wait.
 
 **Depth-6 result, already in hand:**
 
@@ -71,11 +82,20 @@ JSON, and only `p_d` and `g_d` are reported. This is deliberate: the smoke task 
 `p_d = 0.333`, close enough to the threshold that the full pilot may fall below it, and a
 ratio published with a caveat gets quoted without the caveat.
 
-**If the pilot is sane, the full arm is n=28** (matching the routing arm's depth-6 cell),
-about 4.9 days:
-```
-bash scripts/drive_bfcl.sh bfcl28 28 200
-```
+**Decision rule when the pilot lands — do not improvise this either:**
+
+- If `p_6 >= 0.30`: the suppression rule does not fire, `L_6` is reportable, and the
+  n=28 scale-up proceeds **automatically**. It is pre-approved; no separate go-ahead.
+  ```
+  bash scripts/drive_bfcl.sh bfcl28 28 200
+  ```
+- If `p_6 < 0.30`: `L_6` is withheld by the script. Write up `p_6` and `g_6` alone as the
+  finding. **Do not scale to n=28 on a suppressed pilot** — stop and report instead. A
+  4.9-day run whose ratio is already known to be unreportable is spend without a result.
+- Either way, once final numbers exist: **Appendix G**, same register as F — single-model,
+  non-comparative, explicitly not BFCL leaderboard numbers, with the scorer-structure
+  point referenced from Related Work rather than re-argued. Plus one main-text sentence
+  carrying the actual number, not a bare pointer.
 
 Keep `verbose` schema. `compact` is ~30% cheaper but the synthetic arms used `verbose`,
 and comparing BFCL L_d against synthetic L_d is the point — changing the rendering would
@@ -108,6 +128,14 @@ Verdict at `data/results/localval_equivalence.json`.
 
 ---
 
+## Explicitly NOT to be started in this pass
+
+Shuffle control, calling-mode ablation, transformed-argument condition, full-scale linear
+control, and local-quantized Phases 3/4. All are built or designed and idle. This pass
+writes up what exists; it does not open new experimental fronts. Do not start any of them
+on the reasoning that the harness is already there — that it runs is why the line has to
+be held deliberately.
+
 ## Phases 3/4 on local-quantized llama-3.1-8b — **HELD**
 
 Do not start. They were conditional on the equivalence gate passing, and it failed. They
@@ -116,6 +144,16 @@ than the one the gate was meant to license. Revisit after Phase 1's full arm and
 pilot both report.
 
 ---
+
+## Closing checklist, when both arms are in
+
+1. Compile; confirm zero errors; report page count and where main content, references and
+   appendices fall.
+2. Update `docs/PAPER_FLAGS.md` and this file so nothing still reads "pending".
+3. Commit.
+4. The standalone 9-page arXiv version (real names, no conference template) predates all
+   of this and is **stale**. Do not regenerate it — confirm it needs a fresh pass once
+   `main.tex` is final; the author handles that separately.
 
 ## Paper follow-ups
 
