@@ -410,7 +410,7 @@ def _json_schema(tool_view: dict) -> dict:
 
 # --------------------------- parsing ---------------------------
 
-def parse_response(resp: dict, mode: str) -> ParsedCall:
+def parse_response(resp: dict, mode: str, coerce_ints: bool = True) -> ParsedCall:
     if "_backend_error" in resp:
         # the call to the provider never succeeded (exhausted retries); this
         # is a distinct failure mode from the model producing a bad response,
@@ -424,13 +424,17 @@ def parse_response(resp: dict, mode: str) -> ParsedCall:
             return ParsedCall(None, None, parse_ok=False, raw=str(resp))
         try:
             args = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
-            return ParsedCall(tc["name"], _coerce_ints(args), True, str(resp))
+            return ParsedCall(tc["name"], _coerce_ints(args) if coerce_ints else args,
+                              True, str(resp))
         except (json.JSONDecodeError, TypeError):
             return ParsedCall(None, None, False, str(resp))
     text = resp.get("text", "")
     try:
         obj = json.loads(_extract_json(text))
-        return ParsedCall(obj.get("tool"), _coerce_ints(obj.get("args", {})),
+        _a = obj.get("args", {})
+        return ParsedCall(obj.get("tool"),
+                          _coerce_ints(_a) if coerce_ints else (_a if isinstance(_a, dict)
+                                                                else {}),
                           True, text)
     except (json.JSONDecodeError, AttributeError, TypeError):
         return ParsedCall(None, None, False, text)
@@ -541,6 +545,15 @@ def _assistant_turn(call: ParsedCall) -> str:
 
 
 def _coerce_ints(args: dict | None) -> dict:
+    """Digit-strings to ints. Correct for the synthetic suite, WRONG off it.
+
+    Every argument in the generated suite is an integer reference, so a model emitting
+    "5" and one emitting 5 mean the same thing and scoring them differently would measure
+    JSON formatting. On a real benchmark that assumption breaks: BFCL's
+    echo(content='9') writes the STRING "9" to a file, and coercing it made an oracle
+    that emits the gold call score as wrong. Hence the opt-out, defaulted to the old
+    behaviour so no existing arm moves.
+    """
     if not isinstance(args, dict):
         return {}
     out = {}
