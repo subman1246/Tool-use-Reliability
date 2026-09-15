@@ -87,10 +87,39 @@ JSON, and only `p_d` and `g_d` are reported. This is deliberate: the smoke task 
 `p_d = 0.333`, close enough to the threshold that the full pilot may fall below it, and a
 ratio published with a caveat gets quoted without the caveat.
 
+### BLOCKER as of the 6/8 prefix — do not scale until resolved
+
+18% of scored calls (13 of 72) returned `content == ""` with `finish_reason == "stop"`.
+Not truncated, not backend errors, present in BOTH arms (5 teacher-forced, 8 free), and
+scored as parse failures. They drag both rates:
+
+| arm | n | empty | rate incl. empty | rate excl. empty |
+|---|---|---|---|---|
+| teacher-forced (p_6) | 36 | 5 | 0.417 | 0.484 |
+| free (g_6) | 36 | 8 | 0.222 | 0.286 |
+
+A live probe confirms gpt-oss-120b normally populates `content` alongside a separate
+`reasoning` field, so these empties are unexplained rather than a known split. `p_6` is
+either 0.417 or 0.484 and `L_6` depends on both, so the number is uninterpretable and the
+n=28 scale-up is **held regardless of `p_6` clearing 0.30** — the threshold rule was not
+written to catch this.
+
+Commit `9f59a47` makes the backend record `empty_content` and the `reasoning` text when
+content is blank. It captures, it does **not** substitute: an answer left out of `content`
+is not an answer given, and promoting the scratchpad would invent a call.
+
+**Cache caveat for the re-run.** Cache keys are built from the request, so tasks 1–6
+replay from cache and will NOT re-query — meaning they will never gain the
+`empty_content` field. Fresh calls (tasks 7–8, or any new task) will have it. For a clean
+read across all 8, the cache entries for the affected calls must be cleared first;
+otherwise the diagnosis rests only on the fresh tasks. Decide which before re-running,
+because a silent partial diagnosis is worse than a small deliberate one.
+
 **Decision rule when the pilot lands — do not improvise this either:**
 
-- If `p_6 >= 0.30`: the suppression rule does not fire, `L_6` is reportable, and the
-  n=28 scale-up proceeds **automatically**. It is pre-approved; no separate go-ahead.
+- If `p_6 >= 0.30` **and the empty-content blocker above is resolved**: the suppression
+  rule does not fire, `L_6` is reportable, and the n=28 scale-up proceeds
+  **automatically**. It is pre-approved; no separate go-ahead.
   ```
   bash scripts/drive_bfcl.sh bfcl28 28 200
   ```
