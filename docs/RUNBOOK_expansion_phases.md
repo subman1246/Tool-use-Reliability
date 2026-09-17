@@ -117,9 +117,25 @@ because a silent partial diagnosis is worse than a small deliberate one.
 
 **Decision rule when the pilot lands — do not improvise this either:**
 
-- If `p_6 >= 0.30` **and the empty-content blocker above is resolved**: the suppression
-  rule does not fire, `L_6` is reportable, and the n=28 scale-up proceeds
-  **automatically**. It is pre-approved; no separate go-ahead.
+- **Classifier check, at the moment the scale-up decision is made.** Before the
+  automatic n=28 trigger fires — even if `p_6` nominally clears 0.30 — run
+  `py scripts/diagnose_empty_content.py` and read the classification of whatever
+  **fresh, marker-carrying** calls exist by then (tasks 7–8 at minimum, more if the
+  pilot produced them).
+  - If **any** fresh call classifies as *answer stranded* (routing fault, not genuine
+    model failure): **do not scale automatically.** A `p_6` that clears 0.30 while
+    partly measuring a harness bug is not the number the rule was written to trigger on
+    — the rule assumed `p_6` measures the model. Stop and report the classification
+    breakdown, exactly as with the `p_6 < 0.30` stop condition.
+  - If the fresh calls are clean (*budget exhausted* or *genuinely blank* only, no
+    stranding): proceed as specified below, no additional check needed.
+
+  This checks only the fresh evidence available at decision time. It is not a gate on
+  everything else.
+
+- If `p_6 >= 0.30`, the empty-content blocker above is resolved, **and the classifier
+  check is clean**: the suppression rule does not fire, `L_6` is reportable, and the
+  n=28 scale-up proceeds **automatically**. It is pre-approved; no separate go-ahead.
   ```
   bash scripts/drive_bfcl.sh bfcl28 28 200
   ```
