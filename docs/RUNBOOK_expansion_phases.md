@@ -1,8 +1,22 @@
 # Expansion phases: state, and what to run when each lands
 
-Written so the in-flight work is recoverable by someone who was not here. Both sweeps are
-detached (`nohup`), so they survive the session that launched them; what does not survive
-is the context for reading their output, which is what this file is.
+Written so the in-flight work is recoverable by someone who was not here.
+
+**How to launch so a sweep actually survives.** `nohup ... &` from inside the agent's tool
+shell does NOT survive the session: both sweeps died the moment the Claude Code process
+exited, losing ~44h of wall clock while appearing to have been left running. On Windows,
+launch each driver with PowerShell `Start-Process` against `python.exe` directly:
+
+```
+Start-Process -FilePath <python.exe> `
+  -ArgumentList 'scripts/drive_bfcl.py','--tag','bfclpilot','--n','8' `
+  -RedirectStandardOutput 'dataesultsfclpilot_run.log' -WindowStyle Hidden
+```
+
+`Start-Process` against `bash.exe -lc` was tried and silently produced no output and no
+child process, which is why `scripts/drive_bfcl.py` exists as a twin of
+`scripts/drive_bfcl.sh` — same logic, launchable the way that actually detaches. Verify a
+launch by checking for TWO python processes (driver plus its working child), not one.
 
 Rate limits, not compute, are the binding constraint throughout. Groq's daily bucket
 refills continuously at `TPD/86400` tokens per second, so a stalled-looking run is usually
